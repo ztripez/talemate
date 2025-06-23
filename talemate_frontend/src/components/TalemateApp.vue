@@ -297,6 +297,7 @@ import DirectorConsole from './DirectorConsole.vue';
 import DirectorConsoleWidget from './DirectorConsoleWidget.vue';
 // import debounce
 import { debounce } from 'lodash';
+import { hydrateMessages } from '../store/messageStore';
 
 export default {
   components: {
@@ -515,6 +516,7 @@ export default {
     }
   },
   mounted() {
+    hydrateMessages();
     this.connect();
     this.favicon = document.querySelector('link[rel="icon"]');
   },

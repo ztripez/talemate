@@ -83,6 +83,7 @@ import StatusMessage from './StatusMessage.vue';
 import RequestInput from './RequestInput.vue';
 import PlayerChoiceMessage from './PlayerChoiceMessage.vue';
 import ContextInvestigationMessage from './ContextInvestigationMessage.vue';
+import messageStore from '../store/messageStore';
 
 const MESSAGE_FLAGS = {
     NONE: 0,
@@ -115,7 +116,6 @@ export default {
     },
     data() {
         return {
-            messages: [],
             defaultColors: {
                 "narrator": "#B39DDB",
                 "character": "#FFFFFF",
@@ -126,6 +126,14 @@ export default {
         }
     },
     computed: {
+        messages: {
+            get() {
+                return messageStore.messages;
+            },
+            set(val) {
+                messageStore.messages = val;
+            }
+        },
         editorRevisionsEnabled() {
             return this.agentStatus && this.agentStatus.editor && this.agentStatus.editor.actions && this.agentStatus.editor.actions["revision"] && this.agentStatus.editor.actions["revision"].enabled;
         }
