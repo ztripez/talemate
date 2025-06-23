@@ -10,6 +10,29 @@ console.log("VUE_APP_TALEMATE_BACKEND_WEBSOCKET_URL", VUE_APP_TALEMATE_BACKEND_W
 module.exports = defineConfig({
   transpileDependencies: true,
 
+  pwa: {
+    workboxOptions: {
+      skipWaiting: true,
+      clientsClaim: true,
+      runtimeCaching: [
+        {
+          urlPattern: ({ request }) =>
+            ['script', 'style', 'image', 'font', 'document'].includes(
+              request.destination
+            ),
+          handler: 'CacheFirst',
+          options: {
+            cacheName: 'talemate-assets',
+            expiration: {
+              maxEntries: 50,
+              maxAgeSeconds: 60 * 60 * 24 * 7,
+            },
+          },
+        },
+      ],
+    },
+  },
+
   pluginOptions: {
     vuetify: {
 			// https://github.com/vuetifyjs/vuetify-loader/tree/next/packages/vuetify-loader
