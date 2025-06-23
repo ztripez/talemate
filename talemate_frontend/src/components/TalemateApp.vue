@@ -408,6 +408,7 @@ export default {
       lastAgentUpdate: null,
       lastClientUpdate: null,
       busy: false,
+      lastSceneName: null,
     }
   },
   watch:{
@@ -517,6 +518,14 @@ export default {
   mounted() {
     this.connect();
     this.favicon = document.querySelector('link[rel="icon"]');
+    const savedTab = localStorage.getItem('talemate_last_tab');
+    if (savedTab) {
+      this.tab = savedTab;
+    }
+    const savedScene = localStorage.getItem('talemate_last_scene_name');
+    if (savedScene) {
+      this.lastSceneName = savedScene;
+    }
   },
   beforeUnmount() {
     // Close the WebSocket connection when the component is destroyed
@@ -595,6 +604,15 @@ export default {
         this.connected = true;
         this.connecting = false;
         this.requestAppConfig();
+        if (this.lastSceneName) {
+          this.$nextTick(() => {
+            if (this.$refs.loadScene) {
+              this.resetViews();
+              this.$refs.loadScene.loadJsonSceneFromPath(this.lastSceneName);
+            }
+            this.lastSceneName = null;
+          });
+        }
       };
       this.websocket.onclose = (event) => {
         console.log('WebSocket connection closed', event);
@@ -638,6 +656,10 @@ export default {
           this.$nextTick(() => {
             this.tab = 'main';
             debounce(this.onNodeEditorContainerResize, 500)();
+            if (this.scene && this.scene.name) {
+              localStorage.setItem('talemate_last_scene_name', this.scene.name);
+            }
+            localStorage.setItem('talemate_last_tab', this.tab);
           });
         }
         if(data.status == 'error') {
@@ -685,6 +707,9 @@ export default {
         this.activeCharacters = data.data.characters.map((character) => character.name);
         this.agentState = data.data.agent_state;
         this.syncActAs();
+        if (this.scene && this.scene.name) {
+          localStorage.setItem('talemate_last_scene_name', this.scene.name);
+        }
         return;
       }
 
