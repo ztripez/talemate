@@ -81,7 +81,7 @@
     <v-main style="height: 100%; display: flex; flex-direction: column;">
 
       <!-- left side navigation drawer -->
-      <v-navigation-drawer v-model="sceneDrawer" app width="300">
+      <v-navigation-drawer v-model="sceneDrawer" app width="300" :temporary="sceneDrawerTemporary">
         <v-alert v-if="!connected" type="error" variant="tonal">
           Not connected to Talemate backend
           <p class="text-body-2" color="white">
@@ -111,7 +111,7 @@
         </v-tabs-window>
       </v-navigation-drawer>
       <!-- right side navigation drawer -->
-      <v-navigation-drawer v-model="drawer" app location="right" width="300" disable-resize-watcher>
+      <v-navigation-drawer v-model="drawer" app location="right" width="300" disable-resize-watcher :temporary="drawerTemporary">
         <v-alert v-if="!connected" type="error" variant="tonal">
           Not connected to Talemate backend
           <p class="text-body-2" color="white">
@@ -160,7 +160,7 @@
           <!-- SCENE -->
           <v-tabs-window-item :transition="false" :reverse-transition="false" value="main" style="height: 100%;">
             <v-row no-gutters class="position-relative">
-              <v-col ref="nodeEditorContainer" v-resize="onNodeEditorContainerResize" :xl="creativeMode ? 8 : 0" :cols="creativeMode ? 6 : 0" v-if="creativeMode" class="position-relative">
+              <v-col ref="nodeEditorContainer" v-resize="onNodeEditorContainerResize" :xl="creativeMode ? 8 : 0" :cols="creativeMode ? 6 : 0" v-if="creativeMode" class="position-relative" v-show="!display.smAndDown">
                   <NodeEditor
                     :scene="scene"
                     :busy="busy"
@@ -295,6 +295,7 @@ import IntroView from './IntroView.vue';
 import NodeEditor from './NodeEditor.vue';
 import DirectorConsole from './DirectorConsole.vue';
 import DirectorConsoleWidget from './DirectorConsoleWidget.vue';
+import { useDisplay } from 'vuetify';
 // import debounce
 import { debounce } from 'lodash';
 
@@ -320,6 +321,10 @@ export default {
     DirectorConsole,
     RateLimitAlert,
     DirectorConsoleWidget,
+  },
+  setup() {
+    const display = useDisplay();
+    return { display };
   },
   name: 'TalemateApp',
   data() {
@@ -370,6 +375,8 @@ export default {
       sceneActive: false,
       drawer: false,
       sceneDrawer: true,
+      drawerTemporary: false,
+      sceneDrawerTemporary: false,
       debugDrawer: false,
       directorConsoleDrawer: false,
       websocket: null,
@@ -449,6 +456,10 @@ export default {
     debugDrawer() {
       debounce(this.onNodeEditorContainerResize, 250)();
     },
+    'display.smAndDown'(val) {
+      this.sceneDrawerTemporary = val;
+      this.drawerTemporary = val;
+    },
     agentStatus: {
       // check if any of the agent's is busy in a blocking manner
       // this means agentStatus[agent].busy is true and agentStatus[agent].busy_bg is false
@@ -517,6 +528,8 @@ export default {
   mounted() {
     this.connect();
     this.favicon = document.querySelector('link[rel="icon"]');
+    this.sceneDrawerTemporary = this.display.smAndDown;
+    this.drawerTemporary = this.display.smAndDown;
   },
   beforeUnmount() {
     // Close the WebSocket connection when the component is destroyed
