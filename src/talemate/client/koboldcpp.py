@@ -354,8 +354,7 @@ class KoboldCppClient(ClientBase):
         if self.is_openai:
             return await self._generate_openai(prompt, parameters, kind)
         else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self._generate_kcpp_stream, prompt, parameters, kind)
+            return await self._generate_kcpp_native(prompt, parameters, kind)
     
     def _generate_kcpp_stream(self, prompt: str, parameters: dict, kind: str):
         """
@@ -383,6 +382,67 @@ class KoboldCppClient(ClientBase):
             self.update_request_tokens(self.count_tokens(chunk))
         
         return response
+
+    async def _generate_kcpp_native(self, prompt: str, parameters: dict, kind: str):
+        """
+        Generates text using LiteLLM's custom provider for KoboldCpp native API.
+        """
+        self._returned_prompt_tokens = await self.tokencount(prompt.strip())
+
+        try:
+            # Convert to chat format for LiteLLM
+            messages = [{"role": "user", "content": prompt.strip()}]
+            
+            # Prepare LiteLLM parameters for custom provider
+            litellm_params = {
+                "model": "custom/koboldcpp",
+                "messages": messages,
+                "stream": True,
+                "api_base": self.api_url_for_generation,
+                **parameters,
+            }
+
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
+
+            stream = await acompletion(**litellm_params)
+
+            response_text = ""
+
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response_text += content_piece
+                    # Track token usage incrementally
+                    self.update_request_tokens(self.count_tokens(content_piece))
+
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+            else:
+                self._returned_response_tokens = await self.tokencount(response_text)
+
+            return response_text
+        except AuthenticationError as e:
+            log.error("generate error - authentication", e=e)
+            return ""
+        except BadRequestError as e:
+            log.error("generate error - bad request", e=e)
+            return ""
+        except ServiceUnavailableError as e:
+            log.error("generate error - service unavailable", e=e)
+            return ""
+        except Timeout as e:
+            log.error("generate error - timeout", e=e)
+            return ""
+        except Exception as e:
+            log.error("generate error", e=e)
+            return ""
 
     async def _generate_openai(self, prompt: str, parameters: dict, kind: str):
         """

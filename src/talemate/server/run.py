@@ -166,7 +166,7 @@ def run_server(args):
     loop.create_task(install_punkt())
     
     if not args.backend_only:
-        frontend_task = loop.create_task(run_frontend(args.frontend_host, args.frontend_port))
+        frontend_task = loop.create_task(run_frontend(args.host, args.frontend_port))
     else:
         frontend_task = None
 
