@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict, Any
 from .base_provider import BaseProvider, ProviderSetting
 
 class OpenRouterProvider(BaseProvider):
@@ -48,3 +48,4 @@ class OpenRouterProvider(BaseProvider):
                 hidden=True
             )
         ]
+    

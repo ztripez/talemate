@@ -1,5 +1,6 @@
-from typing import Dict, List, Type, Optional
+from typing import Dict, List, Type, Optional, Any
 from .base_provider import BaseProvider, LiteLLMProviderConfig, ProviderSetting
+import litellm
 
 class ProviderRegistry:
     """Registry for managing LiteLLM providers"""
@@ -67,6 +68,27 @@ class ProviderRegistry:
             raise ValueError(f"Unknown provider: {identifier}")
         
         return self._providers[identifier].get_settings_schema()
+    
+    def get_models_with_capabilities(self, instance_id: str, settings: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Get models with capabilities for a provider instance"""
+        try:
+            # For multi-instance providers, extract the base provider ID
+            if "_" in instance_id:
+                base_provider_id = instance_id.split("_")[0]
+            else:
+                base_provider_id = instance_id
+            
+            # Get provider class from registry
+            provider_class = self._providers.get(base_provider_id)
+            if not provider_class:
+                return []
+            
+            # Create provider instance and let it handle everything
+            provider_instance = provider_class()
+            return provider_instance.get_models_with_capabilities(settings)
+            
+        except Exception:
+            return []
 
 # Global registry instance
 registry = ProviderRegistry()

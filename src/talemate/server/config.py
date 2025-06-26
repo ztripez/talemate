@@ -10,6 +10,7 @@ from talemate.config import load_config, save_config
 from talemate.emit import emit
 from talemate.instance import emit_clients_status, get_client
 from talemate.llm_providers import registry as provider_registry
+import litellm
 
 log = structlog.get_logger("talemate.server.config")
 
@@ -486,4 +487,57 @@ class ConfigPlugin:
                 "type": "config",
                 "action": "provider_instance_delete_error",
                 "data": {"message": f"Failed to delete instance: {str(e)}"},
+            })
+    
+    async def handle_request_model_selector(self, data):
+        """Handle request for model selector with provider grouping and capabilities"""
+        log.info("Requesting model selector information")
+        
+        try:
+            # Load current config to get configured providers
+            current_config = load_config()
+            saved_providers = current_config.get("litellm_providers", {})
+            
+            model_groups = []
+            
+            # Process each configured provider instance
+            for instance_id, settings in saved_providers.items():
+                # Get the base provider ID to look up the provider class
+                if "_" in instance_id:
+                    base_provider_id = instance_id.split("_")[0]
+                else:
+                    base_provider_id = instance_id
+                
+                # Get the human-readable provider name from the registry
+                provider_class = provider_registry._providers.get(base_provider_id)
+                if provider_class:
+                    provider_name = provider_class.get_provider_name()
+                else:
+                    # Fallback to instance name if provider not found
+                    provider_name = settings.get("instance_name", instance_id)
+                
+                # Use provider registry to get enhanced models
+                models = provider_registry.get_models_with_capabilities(instance_id, settings)
+                
+                if models:
+                    model_groups.append({
+                        "provider_id": instance_id,
+                        "provider_name": provider_name,
+                        "models": models
+                    })
+            
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_selector_data",
+                "data": {
+                    "model_groups": model_groups
+                },
+            })
+            
+        except Exception as e:
+            log.error("Failed to get model selector data", error=str(e))
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_selector_error",
+                "data": {"message": f"Failed to get model data: {str(e)}"},
             })

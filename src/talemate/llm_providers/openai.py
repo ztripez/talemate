@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict, Any
 from .base_provider import BaseProvider, ProviderSetting
 
 class OpenAIProvider(BaseProvider):
@@ -48,3 +48,7 @@ class OpenAIProvider(BaseProvider):
                 advanced=True
             )
         ]
+    
+    def format_model_name(self, model_name: str, settings: Dict[str, Any] = None) -> str:
+        """OpenAI models don't need prefix"""
+        return model_name

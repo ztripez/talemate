@@ -413,6 +413,17 @@
                                         </div>
                                     </v-alert>
                                     
+                                    <div class="mb-4">
+                                        <v-btn
+                                            color="primary"
+                                            variant="outlined"
+                                            prepend-icon="mdi-robot-outline"
+                                            @click="showModelSelector = true"
+                                        >
+                                            Browse Models
+                                        </v-btn>
+                                    </div>
+                                    
                                     <v-progress-linear v-if="loadingProviders" indeterminate color="primary" class="mb-4"></v-progress-linear>
                                     
                                     <div v-if="!loadingProviders && providers.length === 0" class="text-center py-8">
@@ -766,17 +777,25 @@
             </v-card-text>
         </v-card>
     </v-dialog>
+    
+    <!-- Model Selector -->
+    <ModelSelector
+        v-model="showModelSelector"
+        @modelSelected="onModelSelected"
+    />
 </template>
 <script>
 
 import AppConfigPresets from './AppConfigPresets.vue';
 import AppConfigAppearance from './AppConfigAppearance.vue';
+import ModelSelector from './ModelSelector.vue';
 
 export default {
     name: 'AppConfig',
     components: {
         AppConfigPresets,
         AppConfigAppearance,
+        ModelSelector,
     },
     props: {
         agentStatus: Object,
@@ -857,7 +876,9 @@ export default {
                 {"value": 'asia-south1', "title": 'Asia South 1 - Mumbai'},
                 {"value": 'asia-southeast1', "title": 'Asia Southeast 1 - Singapore'},
                 {"value": 'asia-southeast2', "title": 'Asia Southeast 2 - Jakarta'}
-            ].sort((a, b) => a.title.localeCompare(b.title))
+            ].sort((a, b) => a.title.localeCompare(b.title)),
+            // Model selector
+            showModelSelector: false
         }
     },
     inject: ['getWebsocket', 'registerMessageHandler', 'setWaitingForInput', 'requestSceneAssets', 'requestAppConfig'],
@@ -1168,6 +1189,12 @@ export default {
         cancelInstanceEdit() {
             this.editingInstance = null;
             this.instanceEditDialog = false;
+        },
+        
+        onModelSelected(model) {
+            console.log('Selected model:', model);
+            // TODO: Implement model selection logic
+            // This could emit an event or store the selected model
         },
 
     },
