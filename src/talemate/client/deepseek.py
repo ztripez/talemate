@@ -2,8 +2,16 @@ import json
 
 import pydantic
 import structlog
-import tiktoken
-from openai import AsyncOpenAI, PermissionDeniedError
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ErrorAction, CommonDefaults
 from talemate.client.registry import register
@@ -120,7 +128,6 @@ class DeepSeekClient(ClientBase):
 
     def set_client(self, max_token_length: int = None):
         if not self.deepseek_api_key:
-            self.client = AsyncOpenAI(api_key="sk-1111", base_url=BASE_URL)
             log.error("No DeepSeek API key set")
             if self.api_key_status:
                 self.api_key_status = False
@@ -136,7 +143,11 @@ class DeepSeekClient(ClientBase):
 
         model = self.model_name
 
-        self.client = AsyncOpenAI(api_key=self.deepseek_api_key, base_url=BASE_URL)
+        # Configure LiteLLM for DeepSeek
+        if self.deepseek_api_key:
+            litellm.api_key = self.deepseek_api_key
+        litellm.api_base = BASE_URL
+
         self.max_token_length = max_token_length or 16384
 
         if not self.api_key_status:
@@ -229,16 +240,23 @@ class DeepSeekClient(ClientBase):
         )
 
         try:
-            # Use streaming so we can update_Request_tokens incrementally
-            stream = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[system_message, human_message],
-                stream=True,
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": self.model_name,
+                "messages": [system_message, human_message],
+                "stream": True,
                 **parameters,
-            )
+            }
 
+            # Set API key and base URL if needed
+            if self.deepseek_api_key:
+                litellm_params["api_key"] = self.deepseek_api_key
+            litellm_params["api_base"] = BASE_URL
+
+            stream = await acompletion(**litellm_params)
+            
             response = ""
-
+            
             # Iterate over streamed chunks
             async for chunk in stream:
                 if not chunk.choices:
@@ -249,10 +267,11 @@ class DeepSeekClient(ClientBase):
                     response += content_piece
                     # Incrementally track token usage
                     self.update_request_tokens(self.count_tokens(content_piece))
-
-            # Save token accounting for whole request
-            self._returned_prompt_tokens = self.prompt_tokens(prompt)
-            self._returned_response_tokens = self.response_tokens(response)
+            
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
 
             # older models don't support json_object response coersion
             # and often like to return the response wrapped in ```json
@@ -269,9 +288,27 @@ class DeepSeekClient(ClientBase):
                 response = response[len(right) :].strip()
 
             return response
-        except PermissionDeniedError as e:
-            self.log.error("generate error", e=e)
-            emit("status", message="DeepSeek API: Permission Denied", status="error")
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="DeepSeek API: Authentication Failed", status="error")
+            return ""
+        except RateLimitError as e:
+            self.log.error("generate error - rate limit", e=e)
+            emit("status", message="DeepSeek API: Rate Limit Exceeded", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="DeepSeek API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="DeepSeek API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="DeepSeek API: Request Timeout", status="error")
             return ""
         except Exception as e:
-            raise
+            self.log.error("generate error", e=e)
+            emit("status", message="Error during generation (check logs)", status="error")
+            return ""

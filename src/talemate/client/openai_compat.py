@@ -3,7 +3,16 @@ import urllib
 
 import pydantic
 import structlog
-from openai import AsyncOpenAI, NotFoundError, PermissionDeniedError
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ExtraField
 from talemate.client.registry import register
@@ -86,8 +95,12 @@ class OpenAICompatibleClient(ClientBase):
         self.api_handles_prompt_template = kwargs.get(
             "api_handles_prompt_template", self.api_handles_prompt_template
         )
-        url = self.api_url
-        self.client = AsyncOpenAI(base_url=url, api_key=self.api_key)
+        
+        # Configure LiteLLM for OpenAI Compatible API
+        litellm.api_base = self.api_url
+        if self.api_key:
+            litellm.api_key = self.api_key
+        
         self.model_name = (
             kwargs.get("model") or kwargs.get("model_name") or self.model_name
         )
@@ -116,7 +129,7 @@ class OpenAICompatibleClient(ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
         try:
@@ -128,28 +141,103 @@ class OpenAICompatibleClient(ClientBase):
                     prompt=prompt[:128] + " ...",
                     parameters=parameters,
                 )
-                human_message = {"role": "user", "content": prompt.strip()}
-                response = await self.client.chat.completions.create(
-                    model=self.model_name, messages=[human_message], stream=False, **parameters
-                )
-                response = response.choices[0].message.content
+                
+                messages = [{"role": "user", "content": prompt.strip()}]
+                
+                # Prepare LiteLLM parameters for chat
+                litellm_params = {
+                    "model": f"openai/{self.model_name}",  # Use OpenAI-compatible format
+                    "messages": messages,
+                    "stream": True,
+                    **parameters,
+                }
+                
+                # Set API base and key
+                litellm_params["api_base"] = self.api_url
+                if self.api_key:
+                    litellm_params["api_key"] = self.api_key
+
+                stream = await acompletion(**litellm_params)
+
+                response = ""
+
+                # Iterate over streamed chunks
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta and getattr(delta, "content", None):
+                        content_piece = delta.content
+                        response += content_piece
+                        # Track token usage incrementally
+                        self.update_request_tokens(self.count_tokens(content_piece))
+
+                # Extract token usage if available
+                if hasattr(stream, 'usage') and stream.usage:
+                    self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                    self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+
                 return self.process_response_for_indirect_coercion(prompt, response)
             else:
                 # Talemate handles prompt template
-                # Use the completions endpoint
+                # Convert to chat format for LiteLLM compatibility
                 self.log.debug(
                     "generate (completions)",
                     prompt=prompt[:128] + " ...",
                     parameters=parameters,
                 )
-                parameters["prompt"] = prompt
-                response = await self.client.completions.create(
-                    model=self.model_name, stream=False, **parameters
-                )
-                return response.choices[0].text
-        except PermissionDeniedError as e:
-            self.log.error("generate error", e=e)
-            emit("status", message="Client API: Permission Denied", status="error")
+                
+                messages = [{"role": "user", "content": prompt.strip()}]
+                
+                # Prepare LiteLLM parameters
+                litellm_params = {
+                    "model": f"openai/{self.model_name}",  # Use OpenAI-compatible format
+                    "messages": messages,
+                    "stream": True,
+                    **parameters,
+                }
+                
+                # Set API base and key
+                litellm_params["api_base"] = self.api_url
+                if self.api_key:
+                    litellm_params["api_key"] = self.api_key
+
+                stream = await acompletion(**litellm_params)
+
+                response = ""
+
+                # Iterate over streamed chunks
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta and getattr(delta, "content", None):
+                        content_piece = delta.content
+                        response += content_piece
+                        # Track token usage incrementally
+                        self.update_request_tokens(self.count_tokens(content_piece))
+
+                # Extract token usage if available
+                if hasattr(stream, 'usage') and stream.usage:
+                    self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                    self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+
+                return response
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="OpenAI Compatible API: Authentication Failed", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="OpenAI Compatible API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="OpenAI Compatible API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="OpenAI Compatible API: Request Timeout", status="error")
             return ""
         except Exception as e:
             self.log.error("generate error", e=e)

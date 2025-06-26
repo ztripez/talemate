@@ -14,8 +14,16 @@ import pydantic
 import dataclasses
 import structlog
 import urllib3
-from openai import AsyncOpenAI, PermissionDeniedError
-
+import litellm
+from litellm import acompletion
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 import talemate.client.presets as presets
 import talemate.instance as instance
 import talemate.util as util
@@ -282,7 +290,11 @@ class ClientBase:
         self._embeddings_status = False
 
     def set_client(self, **kwargs):
-        self.client = AsyncOpenAI(base_url=self.api_url, api_key="sk-1111")
+        # Configure LiteLLM for generic OpenAI-compatible endpoint
+        if self.api_url:
+            litellm.api_base = self.api_url
+        if self.api_key:
+            litellm.api_key = self.api_key
         
     def set_embeddings(self):
         
@@ -587,11 +599,9 @@ class ClientBase:
             model_prompt.create_user_override(template, self.model_name)
 
     async def get_model_name(self):
-        models = await self.client.models.list(timeout=self.status_request_timeout)
-        try:
-            return models.data[0].id
-        except IndexError:
-            return None
+        # Base implementation returns configured model name
+        # Specific clients can override this for dynamic model detection
+        return self.model_name
 
     async def status(self):
         """
@@ -699,19 +709,59 @@ class ClientBase:
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text using LiteLLM with OpenAI-compatible interface.
         """
 
         self.log.debug("generate", prompt=prompt[:128] + " ...", parameters=parameters)
 
         try:
-            response = await self.client.completions.create(
-                prompt=prompt.strip(" "), **parameters
-            )
-            return response.get("choices", [{}])[0].get("text", "")
-        except PermissionDeniedError as e:
-            self.log.error("generate error", e=e)
-            emit("status", message="Client API: Permission Denied", status="error")
+            # Prepare LiteLLM parameters for OpenAI-compatible endpoint
+            litellm_params = {
+                "model": f"openai/{self.model_name}" if self.model_name else "openai/gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": prompt.strip()}],
+                **parameters,
+            }
+
+            # Set API key and base URL if needed
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
+            if self.api_url:
+                litellm_params["api_base"] = self.api_url
+
+            response = await acompletion(**litellm_params)
+            
+            # Extract the response text
+            if hasattr(response, 'choices') and response.choices and len(response.choices) > 0:
+                choice = response.choices[0]
+                if hasattr(choice, 'message') and choice.message:
+                    content = choice.message.content or ""
+                elif hasattr(choice, 'text'):
+                    content = choice.text or ""
+                else:
+                    content = ""
+                return content
+            else:
+                return ""
+                
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="Client API: Authentication Failed", status="error")
+            return ""
+        except RateLimitError as e:
+            self.log.error("generate error - rate limit", e=e)
+            emit("status", message="Client API: Rate Limit Exceeded", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="Client API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="Client API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="Client API: Request Timeout", status="error")
             return ""
         except Exception as e:
             self.log.error("generate error", e=e)

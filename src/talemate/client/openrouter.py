@@ -3,6 +3,16 @@ import structlog
 import httpx
 import asyncio
 import json
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ErrorAction, CommonDefaults
 from talemate.client.registry import register
@@ -167,9 +177,6 @@ class OpenRouterClient(ClientBase):
         )
 
     def set_client(self, max_token_length: int = None):
-        # Unlike other clients, we don't need to set up a client instance
-        # We'll use httpx directly in the generate method
-        
         if not self.openrouter_api_key:
             log.error("No OpenRouter API key set")
             if self.api_key_status:
@@ -183,6 +190,11 @@ class OpenRouterClient(ClientBase):
 
         if max_token_length and not isinstance(max_token_length, int):
             max_token_length = int(max_token_length)
+        
+        # Configure LiteLLM for OpenRouter
+        if self.openrouter_api_key:
+            litellm.api_key = self.openrouter_api_key
+        litellm.api_base = "https://openrouter.ai/api/v1"
         
         # Set max token length (default to 16k if not specified)
         self.max_token_length = max_token_length or 16384
@@ -233,7 +245,7 @@ class OpenRouterClient(ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters using OpenRouter API.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
         if not self.openrouter_api_key:
@@ -241,89 +253,81 @@ class OpenRouterClient(ClientBase):
 
         prompt, coercion_prompt = self.split_prompt_for_coercion(prompt)
         
-        # Prepare messages for chat completion
+        system_message = self.get_system_message(kind)
+        
         messages = [
-            {"role": "system", "content": self.get_system_message(kind)},
             {"role": "user", "content": prompt.strip()}
         ]
         
         if coercion_prompt:
             messages.append({"role": "assistant", "content": coercion_prompt.strip()})
 
-        # Prepare request payload
-        payload = {
-            "model": self.model_name,
-            "messages": messages,
-            "stream": True,
-            **parameters
-        }
-
         self.log.debug(
             "generate",
             prompt=prompt[:128] + " ...",
             parameters=parameters,
-            model=self.model_name,
+            system_message=system_message,
         )
-        
-        response_text = ""
-        buffer = ""
-        completion_tokens = 0
-        prompt_tokens = 0
+
         try:
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.openrouter_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                    timeout=120.0  # 2 minute timeout for generation
-                ) as response:
-                    async for chunk in response.aiter_text():
-                        buffer += chunk
-                        
-                        while True:
-                            # Find the next complete SSE line
-                            line_end = buffer.find('\n')
-                            if line_end == -1:
-                                break
-                            
-                            line = buffer[:line_end].strip()
-                            buffer = buffer[line_end + 1:]
-                            
-                            if line.startswith('data: '):
-                                data = line[6:]
-                                if data == '[DONE]':
-                                    break
-                                
-                                try:
-                                    data_obj = json.loads(data)
-                                    content = data_obj["choices"][0]["delta"].get("content")
-                                    usage = data_obj.get("usage", {})
-                                    completion_tokens += usage.get("completion_tokens", 0)
-                                    prompt_tokens += usage.get("prompt_tokens", 0)
-                                    if content:
-                                        response_text += content
-                                        # Update tokens as content streams in
-                                        self.update_request_tokens(self.count_tokens(content))
-                                                                                                                      
-                                except json.JSONDecodeError:
-                                    pass
-                            
-                    # Extract the response content
-                    response_content = response_text
-                    self._returned_prompt_tokens = prompt_tokens
-                    self._returned_response_tokens = completion_tokens
-                    
-                    return response_content
-                
-        except httpx.ConnectTimeout:
-            self.log.error("OpenRouter API timeout")
-            emit("status", message="OpenRouter API: Request timed out", status="error")
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"openrouter/{self.model_name}",
+                "messages": messages,
+                "system": system_message,
+                "stream": True,
+                **parameters,
+            }
+
+            # Set API key and base URL if needed
+            if self.openrouter_api_key:
+                litellm_params["api_key"] = self.openrouter_api_key
+            litellm_params["api_base"] = "https://openrouter.ai/api/v1"
+
+            stream = await acompletion(**litellm_params)
+            
+            response = ""
+            
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response += content_piece
+                    # Incrementally track token usage
+                    self.update_request_tokens(self.count_tokens(content_piece))
+            
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+
+            log.debug("generated response", response=response)
+
+            return response
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="OpenRouter API: Authentication Failed", status="error")
+            return ""
+        except RateLimitError as e:
+            self.log.error("generate error - rate limit", e=e)
+            emit("status", message="OpenRouter API: Rate Limit Exceeded", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="OpenRouter API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="OpenRouter API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="OpenRouter API: Request Timeout", status="error")
             return ""
         except Exception as e:
             self.log.error("generate error", e=e)
-            emit("status", message=f"OpenRouter API Error: {str(e)}", status="error")
-            raise
+            emit("status", message="Error during generation (check logs)", status="error")
+            return ""

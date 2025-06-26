@@ -1,6 +1,15 @@
 import pydantic
 import structlog
-from groq import AsyncGroq, PermissionDeniedError
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ErrorAction, ParameterReroute, ExtraField
 from talemate.client.registry import register
@@ -129,7 +138,6 @@ class GroqClient(EndpointOverrideMixin, ClientBase):
         # Determine if we should use the globally configured API key or the override key
         if not self.groq_api_key and not self.endpoint_override_base_url_configured:
             # No API key and no endpoint override – cannot initialize client correctly
-            self.client = AsyncGroq(api_key="sk-1111")
             log.error("No groq.ai API key set")
             if self.api_key_status:
                 self.api_key_status = False
@@ -145,8 +153,12 @@ class GroqClient(EndpointOverrideMixin, ClientBase):
 
         model = self.model_name
 
-        # Use the override values (if any) when constructing the Groq client
-        self.client = AsyncGroq(api_key=self.api_key, base_url=self.base_url)
+        # Configure LiteLLM for Groq
+        if self.api_key:
+            litellm.api_key = self.api_key
+        if self.base_url:
+            litellm.api_base = self.base_url
+
         self.max_token_length = max_token_length or 16384
 
         if not self.api_key_status:
@@ -181,10 +193,14 @@ class GroqClient(EndpointOverrideMixin, ClientBase):
         self.set_client(max_token_length=self.max_token_length)
 
     def response_tokens(self, response: str):
-        return response.usage.completion_tokens
+        if hasattr(self, '_returned_response_tokens'):
+            return self._returned_response_tokens
+        return 0
 
     def prompt_tokens(self, response: str):
-        return response.usage.prompt_tokens
+        if hasattr(self, '_returned_prompt_tokens'):
+            return self._returned_prompt_tokens
+        return 0
 
     async def status(self):
         self.emit_status()
@@ -201,7 +217,7 @@ class GroqClient(EndpointOverrideMixin, ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
         if not self.groq_api_key and not self.endpoint_override_base_url_configured:
@@ -233,13 +249,39 @@ class GroqClient(EndpointOverrideMixin, ClientBase):
         )
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"groq/{self.model_name}",
+                "messages": messages,
+                "stream": True,
                 **parameters,
-            )
+            }
 
-            response = response.choices[0].message.content
+            # Set API key and base URL if needed
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
+            if self.base_url:
+                litellm_params["api_base"] = self.base_url
+
+            stream = await acompletion(**litellm_params)
+            
+            response = ""
+
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response += content_piece
+                    # Incrementally track token usage
+                    self.update_request_tokens(self.count_tokens(content_piece))
+            
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
 
             # older models don't support json_object response coersion
             # and often like to return the response wrapped in ```json
@@ -256,9 +298,27 @@ class GroqClient(EndpointOverrideMixin, ClientBase):
                 response = response[len(right) :].strip()
 
             return response
-        except PermissionDeniedError as e:
-            self.log.error("generate error", e=e)
-            emit("status", message="OpenAI API: Permission Denied", status="error")
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="Groq API: Authentication Failed", status="error")
+            return ""
+        except RateLimitError as e:
+            self.log.error("generate error - rate limit", e=e)
+            emit("status", message="Groq API: Rate Limit Exceeded", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="Groq API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="Groq API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="Groq API: Request Timeout", status="error")
             return ""
         except Exception as e:
-            raise
+            self.log.error("generate error", e=e)
+            emit("status", message="Error during generation (check logs)", status="error")
+            return ""

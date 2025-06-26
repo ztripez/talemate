@@ -1,9 +1,18 @@
 import asyncio
 import structlog
 import httpx
-import ollama
 import time
 from typing import Union
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import STOPPING_STRINGS, ClientBase, CommonDefaults, ErrorAction, ParameterReroute, ExtraField
 from talemate.client.registry import register
@@ -109,15 +118,15 @@ class OllamaClient(ClientBase):
 
     def set_client(self, **kwargs):
         """
-        Initialize the Ollama client with the API URL.
+        Initialize the Ollama client with LiteLLM configuration.
         """
         # Update model if provided
         if kwargs.get("model"):
             self.model_name = kwargs["model"]
             
-        # Create async client with the configured API URL
-        # Ollama's AsyncClient expects just the base URL without any path
-        self.client = ollama.AsyncClient(host=self.api_url)
+        # Configure LiteLLM for Ollama
+        litellm.api_base = self.api_url
+        
         self.api_handles_prompt_template = kwargs.get(
             "api_handles_prompt_template", self.api_handles_prompt_template
         )   
@@ -166,11 +175,19 @@ class OllamaClient(ClientBase):
         if time.time() - self._models_last_fetched < FETCH_MODELS_INTERVAL:
             return self._available_models
         
-        response = await self.client.list()
-        models = response.get("models", [])
-        model_names = [model.model for model in models]
-        self._available_models = sorted(model_names)
-        self._models_last_fetched = time.time()
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self.api_url}/api/tags", timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                models = data.get("models", [])
+                model_names = [model["name"] for model in models]
+                self._available_models = sorted(model_names)
+                self._models_last_fetched = time.time()
+        except Exception as e:
+            log.error("Failed to fetch models from Ollama", error=str(e))
+            self._available_models = []
+        
         return self._available_models
 
     def finalize_status(self, data: dict):
@@ -230,7 +247,7 @@ class OllamaClient(ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generate text using Ollama's generate endpoint.
+        Generate text using LiteLLM with Ollama.
         """
         if not self.model_name:
             # Try to get a model name
@@ -238,32 +255,69 @@ class OllamaClient(ClientBase):
             if not self.model_name:
                 raise Exception("No model specified or available in Ollama")
         
-        # Prepare options for Ollama
-        options = parameters
+        system_message = self.get_system_message(kind)
         
-        options["num_ctx"] = self.max_token_length
+        # Prepare messages for chat completion or use prompt directly if raw mode
+        if self.can_be_coerced or not self.api_handles_prompt_template:
+            # Use completion mode for raw prompts
+            messages = [{"role": "user", "content": prompt.strip()}]
+        else:
+            # Use chat mode with system message
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt.strip()}
+            ]
         
         try:
-            # Use generate endpoint for completion
-            stream = await self.client.generate(
-                model=self.model_name,
-                prompt=prompt.strip(),
-                options=options,
-                raw=self.can_be_coerced,
-                think=self.can_think,
-                stream=True,
-            )
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"ollama/{self.model_name}",
+                "messages": messages,
+                "stream": True,
+                **parameters,
+            }
+
+            # Set API base URL
+            litellm_params["api_base"] = self.api_url
+            
+            # Add context length if specified
+            if hasattr(self, 'max_token_length') and self.max_token_length:
+                litellm_params["num_ctx"] = self.max_token_length
+
+            stream = await acompletion(**litellm_params)
             
             response = ""
             
-            async for part in stream:
-                content = part.response
-                response += content
-                self.update_request_tokens(self.count_tokens(content))
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response += content_piece
+                    # Incrementally track token usage
+                    self.update_request_tokens(self.count_tokens(content_piece))
             
-            # Extract the response text
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+
             return response
             
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            raise ErrorAction(
+                message="Ollama API: Authentication Failed",
+                title="Authentication Error"
+            )
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            raise ErrorAction(
+                message="Ollama API: Bad Request",
+                title="Bad Request Error"
+            )
         except Exception as e:
             log.error("Ollama generation error", error=str(e), model=self.model_name)
             raise ErrorAction(

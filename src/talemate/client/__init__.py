@@ -1,4 +1,7 @@
 import os
+import litellm
+litellm.drop_params = True
+
 
 import talemate.client.runpod
 from talemate.client.anthropic import AnthropicClient

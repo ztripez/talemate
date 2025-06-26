@@ -1,6 +1,15 @@
 import pydantic
 import structlog
-from anthropic import AsyncAnthropic, PermissionDeniedError
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ErrorAction, CommonDefaults, ExtraField
 from talemate.client.registry import register
@@ -136,7 +145,6 @@ class AnthropicClient(EndpointOverrideMixin, ClientBase):
 
     def set_client(self, max_token_length: int = None):
         if not self.anthropic_api_key and not self.endpoint_override_base_url_configured:
-            self.client = AsyncAnthropic(api_key="sk-1111")
             log.error("No anthropic API key set")
             if self.api_key_status:
                 self.api_key_status = False
@@ -152,7 +160,12 @@ class AnthropicClient(EndpointOverrideMixin, ClientBase):
 
         model = self.model_name
 
-        self.client = AsyncAnthropic(api_key=self.api_key, base_url=self.base_url)
+        # Configure LiteLLM for Anthropic
+        if self.api_key:
+            litellm.api_key = self.api_key
+        if self.base_url:
+            litellm.api_base = self.base_url
+
         self.max_token_length = max_token_length or 16384
 
         if not self.api_key_status:
@@ -205,7 +218,7 @@ class AnthropicClient(EndpointOverrideMixin, ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
         if not self.anthropic_api_key and not self.endpoint_override_base_url_configured:
@@ -228,44 +241,67 @@ class AnthropicClient(EndpointOverrideMixin, ClientBase):
             parameters=parameters,
             system_message=system_message,
         )
-        
-        completion_tokens = 0
-        prompt_tokens = 0
 
         try:
-            stream = await self.client.messages.create(
-                model=self.model_name,
-                system=system_message,
-                messages=messages,
-                stream=True,
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"anthropic/{self.model_name}",
+                "messages": messages,
+                "system": system_message,
+                "stream": True,
                 **parameters,
-            )
+            }
+
+            # Set API key and base URL if needed
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
+            if self.base_url:
+                litellm_params["api_base"] = self.base_url
+
+            stream = await acompletion(**litellm_params)
             
             response = ""
             
-            async for event in stream:
-                
-                if event.type == "content_block_delta":
-                    content = event.delta.text
-                    response += content
-                    self.update_request_tokens(self.count_tokens(content))
-                    
-                elif event.type == "message_start":
-                    prompt_tokens = event.message.usage.input_tokens
-                    
-                elif event.type == "message_delta":
-                    completion_tokens += event.usage.output_tokens
-                
-
-            self._returned_prompt_tokens = prompt_tokens
-            self._returned_response_tokens = completion_tokens
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response += content_piece
+                    # Incrementally track token usage
+                    self.update_request_tokens(self.count_tokens(content_piece))
+            
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
 
             log.debug("generated response", response=response)
 
             return response
-        except PermissionDeniedError as e:
-            self.log.error("generate error", e=e)
-            emit("status", message="anthropic API: Permission Denied", status="error")
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="Anthropic API: Authentication Failed", status="error")
+            return ""
+        except RateLimitError as e:
+            self.log.error("generate error - rate limit", e=e)
+            emit("status", message="Anthropic API: Rate Limit Exceeded", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="Anthropic API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="Anthropic API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="Anthropic API: Request Timeout", status="error")
             return ""
         except Exception as e:
-            raise
+            self.log.error("generate error", e=e)
+            emit("status", message="Error during generation (check logs)", status="error")
+            return ""

@@ -1,8 +1,16 @@
 import pydantic
 import structlog
 from typing import Literal
-from mistralai import Mistral
-from mistralai.models.sdkerror import SDKError
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ErrorAction, ParameterReroute, CommonDefaults, ExtraField
 from talemate.client.registry import register
@@ -132,7 +140,6 @@ class MistralAIClient(EndpointOverrideMixin, ClientBase):
 
     def set_client(self, max_token_length: int = None):
         if not self.mistral_api_key and not self.endpoint_override_base_url_configured:
-            self.client = Mistral(api_key="sk-1111")
             log.error("No mistral.ai API key set")
             if self.api_key_status:
                 self.api_key_status = False
@@ -148,7 +155,12 @@ class MistralAIClient(EndpointOverrideMixin, ClientBase):
 
         model = self.model_name
 
-        self.client = Mistral(api_key=self.api_key, server_url=self.base_url)
+        # Configure LiteLLM for Mistral
+        if self.api_key:
+            litellm.api_key = self.api_key
+        if self.base_url:
+            litellm.api_base = self.base_url
+
         self.max_token_length = max_token_length or 16384
 
         if not self.api_key_status:
@@ -181,10 +193,14 @@ class MistralAIClient(EndpointOverrideMixin, ClientBase):
         self.set_client(max_token_length=self.max_token_length)
 
     def response_tokens(self, response: str):
-        return response.usage.completion_tokens
+        if hasattr(self, '_returned_response_tokens'):
+            return self._returned_response_tokens
+        return 0
 
     def prompt_tokens(self, response: str):
-        return response.usage.prompt_tokens
+        if hasattr(self, '_returned_prompt_tokens'):
+            return self._returned_prompt_tokens
+        return 0
 
     async def status(self):
         self.emit_status()
@@ -208,10 +224,10 @@ class MistralAIClient(EndpointOverrideMixin, ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
-        if not self.mistral_api_key:
+        if not self.mistral_api_key and not self.endpoint_override_base_url_configured:
             raise Exception("No mistral.ai API key set")
 
         supports_json_object = self.model_name in JSON_OBJECT_RESPONSE_MODELS
@@ -241,29 +257,39 @@ class MistralAIClient(EndpointOverrideMixin, ClientBase):
         )
 
         try:
-            event_stream = await self.client.chat.stream_async(
-                model=self.model_name,
-                messages=messages,
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"mistral/{self.model_name}",
+                "messages": messages,
+                "stream": True,
                 **parameters,
-            )
+            }
 
+            # Set API key and base URL if needed
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
+            if self.base_url:
+                litellm_params["api_base"] = self.base_url
+
+            stream = await acompletion(**litellm_params)
+            
             response = ""
             
-            completion_tokens = 0
-            prompt_tokens = 0
-
-            async for event in event_stream:
-                if event.data.choices:
-                    response += event.data.choices[0].delta.content
-                    self.update_request_tokens(self.count_tokens(event.data.choices[0].delta.content))
-                if event.data.usage:
-                    completion_tokens += event.data.usage.completion_tokens
-                    prompt_tokens += event.data.usage.prompt_tokens
-
-            self._returned_prompt_tokens = prompt_tokens
-            self._returned_response_tokens = completion_tokens
-
-            #response = response.choices[0].message.content
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response += content_piece
+                    # Incrementally track token usage
+                    self.update_request_tokens(self.count_tokens(content_piece))
+            
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
 
             # older models don't support json_object response coersion
             # and often like to return the response wrapped in ```json
@@ -280,14 +306,27 @@ class MistralAIClient(EndpointOverrideMixin, ClientBase):
                 response = response[len(right) :].strip()
 
             return response
-        except SDKError as e:
-            self.log.error("generate error", e=e)
-            if hasattr(e, 'status_code') and e.status_code in [403, 401]:
-                emit(
-                    "status",
-                    message="mistral.ai API: Permission Denied",
-                    status="error",
-                )
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="Mistral API: Authentication Failed", status="error")
+            return ""
+        except RateLimitError as e:
+            self.log.error("generate error - rate limit", e=e)
+            emit("status", message="Mistral API: Rate Limit Exceeded", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="Mistral API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="Mistral API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="Mistral API: Request Timeout", status="error")
             return ""
         except Exception as e:
-            raise
+            self.log.error("generate error", e=e)
+            emit("status", message="Error during generation (check logs)", status="error")
+            return ""

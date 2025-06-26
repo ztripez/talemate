@@ -6,7 +6,16 @@ import requests
 import asyncio
 import httpx
 import structlog
-from openai import AsyncOpenAI
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import STOPPING_STRINGS, ClientBase, Defaults, ExtraField
 from talemate.client.registry import register
@@ -100,7 +109,13 @@ class TextGeneratorWebuiClient(ClientBase):
 
     def set_client(self, **kwargs):
         self.api_key = kwargs.get("api_key", self.api_key)
-        self.client = AsyncOpenAI(base_url=self.api_url + "/v1", api_key="sk-1111")
+        
+        # Configure LiteLLM for TextGenWebUI
+        litellm.api_base = self.api_url + "/v1"
+        if self.api_key:
+            litellm.api_key = self.api_key
+        else:
+            litellm.api_key = "sk-1111"  # TextGenWebUI doesn't require a real API key by default
 
     def finalize_llama3(self, parameters: dict, prompt: str) -> tuple[str, bool]:
 
@@ -169,35 +184,65 @@ class TextGeneratorWebuiClient(ClientBase):
             )
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._generate, prompt, parameters, kind)
+        """
+        Generates text from the given prompt and parameters using LiteLLM.
+        """
 
-    def _generate(self, prompt: str, parameters: dict, kind: str):
-        """
-        Generates text from the given prompt and parameters.
-        """
-        parameters["prompt"] = prompt.strip(" ")
-        
-        response = ""
-        parameters["stream"] = True
-        stream_response = requests.post(
-            f"{self.api_url}/v1/completions",
-            json=parameters,
-            timeout=None,
-            headers=self.request_headers,
-            stream=True,
-        )
-        stream_response.raise_for_status()
-        
-        sse = sseclient.SSEClient(stream_response)
-        
-        for event in sse.events():
-            payload = json.loads(event.data)
-            chunk = payload['choices'][0]['text']
-            response += chunk
-            self.update_request_tokens(self.count_tokens(chunk))
-        
-        return response
+        try:
+            # Convert to chat format for LiteLLM
+            messages = [{"role": "user", "content": prompt.strip()}]
+            
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"openai/{self.model_name}",  # Use OpenAI-compatible format
+                "messages": messages,
+                "stream": True,
+                **parameters,
+            }
+
+            # Set API base and key
+            litellm_params["api_base"] = self.api_url + "/v1"
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
+            else:
+                litellm_params["api_key"] = "sk-1111"
+
+            stream = await acompletion(**litellm_params)
+
+            response = ""
+
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response += content_piece
+                    # Track token usage incrementally
+                    self.update_request_tokens(self.count_tokens(content_piece))
+
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+
+            return response
+        except AuthenticationError as e:
+            log.error("generate error - authentication", e=e)
+            return ""
+        except BadRequestError as e:
+            log.error("generate error - bad request", e=e)
+            return ""
+        except ServiceUnavailableError as e:
+            log.error("generate error - service unavailable", e=e)
+            return ""
+        except Timeout as e:
+            log.error("generate error - timeout", e=e)
+            return ""
+        except Exception as e:
+            log.error("generate error", e=e)
+            return ""
 
 
     def jiggle_randomness(self, prompt_config: dict, offset: float = 0.3) -> dict:

@@ -11,6 +11,16 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 import structlog
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 import talemate.util as util
 from talemate.client.base import (
@@ -203,6 +213,17 @@ class KoboldCppClient(ClientBase):
     def set_client(self, **kwargs):
         self.api_key = kwargs.get("api_key", self.api_key)
         self.ensure_api_endpoint_specified()
+        
+        # Configure LiteLLM for KoboldCpp
+        if self.is_openai:
+            # Use OpenAI-compatible endpoint
+            litellm.api_base = self.api_url
+            if self.api_key:
+                litellm.api_key = self.api_key
+        else:
+            # For KoboldCpp native API, we'll continue using the custom implementation
+            # since LiteLLM doesn't support KoboldCpp's native streaming API
+            pass
 
     async def get_embeddings_model_name(self):
         # if self._embeddings_model_name is set, return it
@@ -365,37 +386,66 @@ class KoboldCppClient(ClientBase):
 
     async def _generate_openai(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
-        parameters["prompt"] = prompt.strip(" ")
+        self._returned_prompt_tokens = await self.tokencount(prompt.strip())
 
-        self._returned_prompt_tokens = await self.tokencount(parameters["prompt"])
+        try:
+            # Convert to chat format for LiteLLM
+            messages = [{"role": "user", "content": prompt.strip()}]
+            
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"openai/{self.model_name}",  # Use OpenAI-compatible format
+                "messages": messages,
+                "stream": True,
+                **parameters,
+            }
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.api_url_for_generation,
-                json=parameters,
-                timeout=None,
-                headers=self.request_headers,
-            )
-            response_data = response.json()
-            try:
-                if self.is_openai:
-                    response_text = response_data["choices"][0]["text"]
-                else:
-                    response_text = response_data["results"][0]["text"]
-            except (TypeError, KeyError) as exc:
-                log.error(
-                    "Failed to generate text",
-                    exc=exc,
-                    response_data=response_data,
-                    response_status=response.status_code,
-                )
-                response_text = ""
+            # Set API base and key
+            litellm_params["api_base"] = self.api_url
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
 
-            self._returned_response_tokens = await self.tokencount(response_text)
+            stream = await acompletion(**litellm_params)
+
+            response_text = ""
+
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response_text += content_piece
+                    # Track token usage incrementally
+                    self.update_request_tokens(self.count_tokens(content_piece))
+
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+            else:
+                self._returned_response_tokens = await self.tokencount(response_text)
+
             return response_text
+        except AuthenticationError as e:
+            log.error("generate error - authentication", e=e)
+            return ""
+        except BadRequestError as e:
+            log.error("generate error - bad request", e=e)
+            return ""
+        except ServiceUnavailableError as e:
+            log.error("generate error - service unavailable", e=e)
+            return ""
+        except Timeout as e:
+            log.error("generate error - timeout", e=e)
+            return ""
+        except Exception as e:
+            log.error("generate error", e=e)
+            return ""
 
     def jiggle_randomness(self, prompt_config: dict, offset: float = 0.3) -> dict:
         """

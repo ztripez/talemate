@@ -4,7 +4,16 @@ import json
 import httpx
 import pydantic
 import structlog
-from openai import PermissionDeniedError
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ExtraField, CommonDefaults
 from talemate.client.registry import register
@@ -101,6 +110,11 @@ class TabbyAPIClient(ClientBase):
         self.model_name = (
             kwargs.get("model") or kwargs.get("model_name") or self.model_name
         )
+        
+        # Configure LiteLLM for TabbyAPI
+        litellm.api_base = self.api_url
+        if self.api_key:
+            litellm.api_key = self.api_key
 
     def prompt_template(self, system_message: str, prompt: str):
 
@@ -139,7 +153,7 @@ class TabbyAPIClient(ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters using streaming responses.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
         # Determine whether we are using chat or completions endpoint
@@ -154,100 +168,57 @@ class TabbyAPIClient(ClientBase):
                     parameters=parameters,
                 )
 
-                human_message = {"role": "user", "content": prompt.strip()}
-
-                payload = {
-                    "model": self.model_name,
-                    "messages": [human_message],
+                messages = [{"role": "user", "content": prompt.strip()}]
+                
+                # Prepare LiteLLM parameters for chat
+                litellm_params = {
+                    "model": f"openai/{self.model_name}",  # Use OpenAI-compatible format
+                    "messages": messages,
                     "stream": True,
-                    "stream_options": {
-                        "include_usage": True,
-                    },
                     **parameters,
                 }
-                endpoint = "chat/completions"
             else:
-                # Completions endpoint
+                # Completions endpoint - convert to chat format for LiteLLM
                 self.log.debug(
                     "generate (completions)",
                     prompt=prompt[:128] + " ...",
                     parameters=parameters,
                 )
 
-                payload = {
-                    "model": self.model_name,
-                    "prompt": prompt,
+                messages = [{"role": "user", "content": prompt.strip()}]
+                
+                # Prepare LiteLLM parameters
+                litellm_params = {
+                    "model": f"openai/{self.model_name}",  # Use OpenAI-compatible format
+                    "messages": messages,
                     "stream": True,
                     **parameters,
                 }
-                endpoint = "completions"
 
-            url = urljoin(self.api_url, endpoint)
+            # Set API base and key
+            litellm_params["api_base"] = self.api_url
+            if self.api_key:
+                litellm_params["api_key"] = self.api_key
 
-            headers = {
-                "x-api-key": self.api_key,
-                "Content-Type": "application/json",
-            }
+            stream = await acompletion(**litellm_params)
 
             response_text = ""
-            buffer = ""
-            completion_tokens = 0
-            prompt_tokens = 0
 
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST", 
-                    url, 
-                    headers=headers, 
-                    json=payload, 
-                    timeout=120.0
-                ) as response:
-                    async for chunk in response.aiter_text():
-                        buffer += chunk
+            # Iterate over streamed chunks
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response_text += content_piece
+                    # Track token usage incrementally
+                    self.update_request_tokens(self.count_tokens(content_piece))
 
-                        while True:
-                            line_end = buffer.find('\n')
-                            if line_end == -1:
-                                break
-
-                            line = buffer[:line_end].strip()
-                            buffer = buffer[line_end + 1:]
-
-                            if not line:
-                                continue
-
-                            if line.startswith("data: "):
-                                data = line[6:]
-                                if data == "[DONE]":
-                                    break
-
-                                try:
-                                    data_obj = json.loads(data)
-
-                                    choice = data_obj.get("choices", [{}])[0]
-
-                                    # Chat completions use delta -> content.  
-                                    delta = choice.get("delta", {})
-                                    content = (
-                                        delta.get("content")
-                                        or delta.get("text")
-                                        or choice.get("text")
-                                    )
-
-                                    usage = data_obj.get("usage", {})
-                                    completion_tokens = usage.get("completion_tokens", 0)
-                                    prompt_tokens = usage.get("prompt_tokens", 0)
-
-                                    if content:
-                                        response_text += content
-                                        self.update_request_tokens(self.count_tokens(content))
-                                except json.JSONDecodeError:
-                                    # ignore malformed json chunks
-                                    pass
-
-            # Save token stats for logging
-            self._returned_prompt_tokens = prompt_tokens
-            self._returned_response_tokens = completion_tokens
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
 
             if is_chat:
                 # Process indirect coercion
@@ -255,13 +226,21 @@ class TabbyAPIClient(ClientBase):
 
             return response_text
 
-        except PermissionDeniedError as e:
-            self.log.error("generate error", e=e)
-            emit("status", message="Client API: Permission Denied", status="error")
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="TabbyAPI: Authentication Failed", status="error")
             return ""
-        except httpx.ConnectTimeout:
-            self.log.error("API timeout")
-            emit("status", message="TabbyAPI: Request timed out", status="error")
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="TabbyAPI: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="TabbyAPI: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="TabbyAPI: Request Timeout", status="error")
             return ""
         except Exception as e:
             self.log.error("generate error", e=e)

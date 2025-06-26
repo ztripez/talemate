@@ -1,5 +1,14 @@
 import pydantic
-from openai import AsyncOpenAI
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ParameterReroute, CommonDefaults
 from talemate.client.registry import register
@@ -33,12 +42,15 @@ class LMStudioClient(ClientBase):
         ]
 
     def set_client(self, **kwargs):
-        self.client = AsyncOpenAI(base_url=self.api_url + "/v1", api_key="sk-1111")
+        # Configure LiteLLM for LMStudio
+        litellm.api_base = self.api_url + "/v1"
+        litellm.api_key = "sk-1111"  # LMStudio doesn't require a real API key
 
     def reconfigure(self, **kwargs):
         super().reconfigure(**kwargs)
         
-        if self.client and self.client.base_url != self.api_url:
+        # Reconfigure LiteLLM if API URL changed
+        if "api_url" in kwargs:
             self.set_client()
 
     async def get_model_name(self):
@@ -54,9 +66,7 @@ class LMStudioClient(ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters using a streaming
-        request so that token usage can be tracked incrementally via
-        `update_request_tokens`.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
         self.log.debug(
@@ -66,13 +76,22 @@ class LMStudioClient(ClientBase):
         )
 
         try:
-            # Send the request in streaming mode so we can update token counts
-            stream = await self.client.completions.create(
-                model=self.model_name,
-                prompt=prompt,
-                stream=True,
+            # Convert to chat format for LiteLLM
+            messages = [{"role": "user", "content": prompt}]
+            
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"lm_studio/{self.model_name}",  # Use LM Studio format
+                "messages": messages,
+                "stream": True,
                 **parameters,
-            )
+            }
+
+            # Set API base and key
+            litellm_params["api_base"] = self.api_url + "/v1"
+            litellm_params["api_key"] = "sk-1111"
+
+            stream = await acompletion(**litellm_params)
 
             response = ""
 
@@ -81,16 +100,31 @@ class LMStudioClient(ClientBase):
             async for chunk in stream:
                 if not chunk.choices:
                     continue
-                content_piece = chunk.choices[0].text
-                response += content_piece
-                # Track token usage incrementally
-                self.update_request_tokens(self.count_tokens(content_piece))
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
+                    response += content_piece
+                    # Track token usage incrementally
+                    self.update_request_tokens(self.count_tokens(content_piece))
 
-            # Store overall token accounting once the stream is finished
-            self._returned_prompt_tokens = self.prompt_tokens(prompt)
-            self._returned_response_tokens = self.response_tokens(response)
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
 
             return response
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            return ""
         except Exception as e:
             self.log.error("generate error", e=e)
             return ""

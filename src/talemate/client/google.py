@@ -3,9 +3,16 @@ import os
 
 import pydantic
 import structlog
-from google import genai
-import google.genai.types as genai_types
-from google.genai.errors import APIError
+import litellm
+from litellm import acompletion, ModelResponse
+from litellm.exceptions import (
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    APIError
+)
 
 from talemate.client.base import ClientBase, ErrorAction, ExtraField, ParameterReroute, CommonDefaults
 from talemate.client.registry import register
@@ -150,39 +157,26 @@ class GoogleClient(EndpointOverrideMixin, RemoteServiceMixin, ClientBase):
         if not self.disable_safety_settings:
             return None
 
-        safety_settings = [
-            genai_types.SafetySetting(
-                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold="BLOCK_NONE",
-            ),
-            genai_types.SafetySetting(
-                category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold="BLOCK_NONE",
-            ),
-            genai_types.SafetySetting(
-                category="HARM_CATEGORY_HARASSMENT",
-                threshold="BLOCK_NONE",
-            ),
-            genai_types.SafetySetting(
-                category="HARM_CATEGORY_HATE_SPEECH",
-                threshold="BLOCK_NONE",
-            ),
-            genai_types.SafetySetting(
-                category="HARM_CATEGORY_CIVIC_INTEGRITY",
-                threshold="BLOCK_NONE",
-            ),
-        ]
-
-        return safety_settings
+        # LiteLLM handles safety settings differently
+        # Return a dict that can be passed to the API
+        return {
+            "safety_settings": [
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
+            ]
+        }
 
     @property
-    def http_options(self) -> genai_types.HttpOptions | None:
+    def http_options(self) -> dict | None:
         if not self.endpoint_override_base_url_configured:
             return None
         
-        return genai_types.HttpOptions(
-            base_url=self.base_url
-        )
+        return {
+            "api_base": self.base_url
+        }
 
     @property
     def supported_parameters(self):
@@ -276,14 +270,12 @@ class GoogleClient(EndpointOverrideMixin, RemoteServiceMixin, ClientBase):
 
         self.max_token_length = max_token_length or 16384
 
-        if self.vertexai_ready and not self.developer_api_ready:
-            self.client = genai.Client(
-                vertexai=True,
-                project=self.google_project_id,
-                location=self.google_location,
-            )
-        else:
-            self.client = genai.Client(api_key=self.api_key or None, http_options=self.http_options)
+        # Configure LiteLLM for Google
+        if self.google_api_key:
+            os.environ["GEMINI_API_KEY"] = self.google_api_key
+        
+        if self.base_url:
+            litellm.api_base = self.base_url
 
         log.info(
             "google set client",
@@ -332,7 +324,7 @@ class GoogleClient(EndpointOverrideMixin, RemoteServiceMixin, ClientBase):
 
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text from the given prompt and parameters using LiteLLM.
         """
 
         if not self.ready:
@@ -343,28 +335,13 @@ class GoogleClient(EndpointOverrideMixin, RemoteServiceMixin, ClientBase):
         human_message = prompt.strip()
         system_message = self.get_system_message(kind)
         
-        contents = [
-            genai_types.Content(
-                role="user",
-                parts=[
-                    genai_types.Part.from_text(
-                        text=human_message,
-                    )
-                ]
-            )
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": human_message}
         ]
         
         if coercion_prompt:
-            contents.append(
-                genai_types.Content(
-                    role="model",
-                    parts=[
-                        genai_types.Part.from_text(
-                            text=coercion_prompt,
-                        )
-                    ]
-                )
-            )
+            messages.append({"role": "assistant", "content": coercion_prompt.strip()})
 
         self.log.debug(
             "generate",
@@ -377,53 +354,71 @@ class GoogleClient(EndpointOverrideMixin, RemoteServiceMixin, ClientBase):
         )
 
         try:
-            # Use streaming so we can update_Request_tokens incrementally
-            #stream = await chat.send_message_async(
-            #    human_message,
-            #    safety_settings=self.safety_settings,
-            #    generation_config=parameters,
-            #    stream=True
-            #)
+            # Prepare LiteLLM parameters
+            litellm_params = {
+                "model": f"vertex_ai/{self.model_name}",
+                "messages": messages,
+                "stream": True,
+                **parameters,
+            }
 
+            # Add safety settings if disabled
+            if self.safety_settings:
+                litellm_params.update(self.safety_settings)
+
+            # Set API key if available
+            if self.google_api_key:
+                litellm_params["api_key"] = self.google_api_key
             
-            stream = await self.client.aio.models.generate_content_stream(
-                model=self.model_name,
-                contents=contents,
-                config=genai_types.GenerateContentConfig(
-                    safety_settings=self.safety_settings,
-                    http_options=self.http_options,
-                    **parameters
-                ),
-            )
+            # Set base URL if configured
+            if self.base_url:
+                litellm_params["api_base"] = self.base_url
+
+            stream = await acompletion(**litellm_params)
             
             response = ""
 
+            # Iterate over streamed chunks
             async for chunk in stream:
-                # For each streamed chunk, append content and update token counts
-                content_piece = getattr(chunk, "text", None)
-                if not content_piece:
-                    # Some SDK versions wrap text under candidates[0].text
-                    try:
-                        content_piece = chunk.candidates[0].text  # type: ignore
-                    except Exception:
-                        content_piece = None
-
-                if content_piece:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta and getattr(delta, "content", None):
+                    content_piece = delta.content
                     response += content_piece
                     # Incrementally update token usage
                     self.update_request_tokens(count_tokens(content_piece))
 
-            # Store total token accounting for prompt/response
-            self._returned_prompt_tokens = self.prompt_tokens(prompt)
-            self._returned_response_tokens = self.response_tokens(response)
+            # Extract token usage if available
+            if hasattr(stream, 'usage') and stream.usage:
+                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
+                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
 
             log.debug("generated response", response=response)
 
             return response
-
-        except APIError as e:
-            self.log.error("generate error", e=e)
-            emit("status", message="google API: API Error", status="error")
+        
+        except AuthenticationError as e:
+            self.log.error("generate error - authentication", e=e)
+            emit("status", message="Google API: Authentication Failed", status="error")
+            return ""
+        except RateLimitError as e:
+            self.log.error("generate error - rate limit", e=e)
+            emit("status", message="Google API: Rate Limit Exceeded", status="error")
+            return ""
+        except BadRequestError as e:
+            self.log.error("generate error - bad request", e=e)
+            emit("status", message="Google API: Bad Request", status="error")
+            return ""
+        except ServiceUnavailableError as e:
+            self.log.error("generate error - service unavailable", e=e)
+            emit("status", message="Google API: Service Unavailable", status="error")
+            return ""
+        except Timeout as e:
+            self.log.error("generate error - timeout", e=e)
+            emit("status", message="Google API: Request Timeout", status="error")
             return ""
         except Exception as e:
-            raise
+            self.log.error("generate error", e=e)
+            emit("status", message="Error during generation (check logs)", status="error")
+            return ""
