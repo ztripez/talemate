@@ -536,6 +536,8 @@ class Config(BaseModel):
     
     system_prompts: SystemPrompts = SystemPrompts()
     
+    litellm_providers: Dict[str, Dict[str, Any]] = {}
+    
     class Config:
         extra = "ignore"
 
