@@ -1,6 +1,7 @@
 import pydantic
 import structlog
 import os
+import datetime
 
 from talemate import VERSION
 from talemate.client.model_prompts import model_prompt
@@ -540,4 +541,152 @@ class ConfigPlugin:
                 "type": "config",
                 "action": "model_selector_error",
                 "data": {"message": f"Failed to get model data: {str(e)}"},
+            })
+    
+    async def handle_save_model_config(self, data):
+        """Handle saving a model configuration"""
+        log.info("Saving model configuration", data=data)
+        
+        try:
+            # Load current config
+            current_config = load_config()
+            
+            # Initialize model_configs section if it doesn't exist
+            if "model_configs" not in current_config:
+                current_config["model_configs"] = {}
+            
+            # Create unique config ID
+            import uuid
+            config_id = data.get("config_id") or str(uuid.uuid4())
+            
+            # Save model configuration
+            current_config["model_configs"][config_id] = {
+                "id": config_id,
+                "name": data.get("name"),
+                "model": data.get("model"),
+                "provider": data.get("provider"),
+                "parameters": data.get("parameters", {}),
+                "created_at": data.get("created_at") or str(datetime.datetime.now()),
+                "updated_at": str(datetime.datetime.now())
+            }
+            
+            log.info("Model config to save", config_id=config_id, configs_count=len(current_config.get("model_configs", {})))
+            
+            # Save config to file
+            save_config(current_config)
+            
+            # Update websocket handler config
+            self.websocket_handler.config = current_config
+            
+            # Send success response
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_config_save_complete",
+                "data": {
+                    "config_id": config_id,
+                    "message": "Model configuration saved successfully"
+                },
+            })
+            
+            # Send updated app config
+            self.websocket_handler.queue_put({
+                "type": "app_config",
+                "data": current_config,
+                "version": VERSION
+            })
+            
+        except Exception as e:
+            log.error("Failed to save model configuration", error=str(e))
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_config_save_error",
+                "data": {"message": f"Failed to save configuration: {str(e)}"},
+            })
+    
+    async def handle_delete_model_config(self, data):
+        """Handle deleting a model configuration"""
+        config_id = data.get("config_id")
+        log.info("Deleting model configuration", config_id=config_id)
+        
+        if not config_id:
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_config_delete_error",
+                "data": {"message": "Configuration ID is required"},
+            })
+            return
+        
+        try:
+            # Load current config
+            current_config = load_config()
+            
+            # Check if config exists
+            if "model_configs" not in current_config or config_id not in current_config["model_configs"]:
+                self.websocket_handler.queue_put({
+                    "type": "config",
+                    "action": "model_config_delete_error",
+                    "data": {"message": "Configuration not found"},
+                })
+                return
+            
+            # Delete configuration
+            del current_config["model_configs"][config_id]
+            
+            # Save config to file
+            save_config(current_config)
+            
+            # Update websocket handler config
+            self.websocket_handler.config = current_config
+            
+            # Send success response
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_config_delete_complete",
+                "data": {
+                    "config_id": config_id,
+                    "message": "Model configuration deleted successfully"
+                },
+            })
+            
+            # Send updated app config
+            self.websocket_handler.queue_put({
+                "type": "app_config",
+                "data": current_config,
+                "version": VERSION
+            })
+            
+        except Exception as e:
+            log.error("Failed to delete model configuration", error=str(e))
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_config_delete_error",
+                "data": {"message": f"Failed to delete configuration: {str(e)}"},
+            })
+    
+    async def handle_request_model_configs(self, data):
+        """Handle request for saved model configurations"""
+        log.info("Requesting model configurations")
+        
+        try:
+            # Load current config
+            current_config = load_config()
+            model_configs = current_config.get("model_configs", {})
+            
+            # Convert to list format
+            configs_list = list(model_configs.values())
+            
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_configs_data",
+                "data": {
+                    "configs": configs_list
+                },
+            })
+            
+        except Exception as e:
+            log.error("Failed to get model configurations", error=str(e))
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_configs_error",
+                "data": {"message": f"Failed to get configurations: {str(e)}"},
             })

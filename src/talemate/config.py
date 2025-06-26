@@ -538,6 +538,8 @@ class Config(BaseModel):
     
     litellm_providers: Dict[str, Dict[str, Any]] = {}
     
+    model_configs: Dict[str, Dict[str, Any]] = {}
+    
     class Config:
         extra = "ignore"
 
