@@ -673,10 +673,8 @@ export default {
           type: 'success'
         })
         
-        // Refresh saved configs if dialog is open
-        if (this.savedConfigsDialog) {
-          this.loadSavedConfigs()
-        }
+        // Always refresh saved configs to update the counter
+        this.loadSavedConfigsSilently()
         
       } catch (err) {
         console.error('Failed to save model configuration:', err)
@@ -840,8 +838,10 @@ export default {
     
     // Saved configurations methods
     async openSavedConfigs() {
+      console.log('Opening saved configs dialog')
       this.savedConfigsDialog = true
       await this.loadSavedConfigs()
+      console.log('Loaded configs:', this.savedConfigs)
     },
     
     async loadSavedConfigs() {
@@ -879,6 +879,7 @@ export default {
     
     waitForConfigsData() {
       return new Promise((resolve, reject) => {
+        const ws = this.getWebsocket()
         const timeout = setTimeout(() => {
           reject(new Error('Timeout waiting for configs data'))
         }, 5000)
@@ -903,14 +904,19 @@ export default {
           }
         }
         
-        const ws = this.getWebsocket()
         ws.addEventListener('message', handler)
       })
     },
     
     editConfig(config) {
       this.editingConfig = config
-      this.selectedModel = config.model
+      
+      // Reconstruct the full model object with parameters array
+      this.selectedModel = {
+        ...config.model,
+        parameters: Object.keys(config.parameters || {})
+      }
+      
       this.selectedProvider = config.provider
       this.configName = config.name
       this.modelConfig = { ...config.parameters }

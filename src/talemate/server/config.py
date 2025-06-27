@@ -521,17 +521,23 @@ class ConfigPlugin:
                 models = provider_registry.get_models_with_capabilities(instance_id, settings)
                 
                 if models:
+                    # Sort models by display name within each provider
+                    sorted_models = sorted(models, key=lambda m: m.get("display_name", m.get("name", "")).lower())
+                    
                     model_groups.append({
                         "provider_id": instance_id,
                         "provider_name": provider_name,
-                        "models": models
+                        "models": sorted_models
                     })
+            
+            # Sort provider groups by provider name
+            sorted_model_groups = sorted(model_groups, key=lambda g: g.get("provider_name", "").lower())
             
             self.websocket_handler.queue_put({
                 "type": "config",
                 "action": "model_selector_data",
                 "data": {
-                    "model_groups": model_groups
+                    "model_groups": sorted_model_groups
                 },
             })
             
