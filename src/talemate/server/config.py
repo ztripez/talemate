@@ -549,6 +549,62 @@ class ConfigPlugin:
                 "data": {"message": f"Failed to get model data: {str(e)}"},
             })
     
+    async def _validate_model_parameters(self, provider_id: str, model_name: str, parameters: dict) -> dict:
+        """Validate model parameters against what the provider supports"""
+        try:
+            # Get provider settings from config
+            current_config = load_config()
+            saved_providers = current_config.get("litellm_providers", {})
+            provider_settings = saved_providers.get(provider_id, {})
+            
+            # Get base provider ID (handle multi-instance providers)
+            base_provider_id = provider_id.split("_")[0] if "_" in provider_id else provider_id
+            
+            # Get provider class from registry
+            provider_class = provider_registry._providers.get(base_provider_id)
+            if not provider_class:
+                log.warning("Provider not found in registry", provider_id=base_provider_id)
+                return parameters
+            
+            # Create provider instance and get supported parameters
+            provider_instance = provider_class()
+            formatted_model = provider_instance.format_model_name(model_name, provider_settings)
+            supported_params = provider_instance.get_model_parameters(formatted_model)
+            
+            # Filter parameters to only include supported ones
+            validated_params = {}
+            invalid_params = []
+            
+            for key, value in parameters.items():
+                if key in supported_params:
+                    validated_params[key] = value
+                else:
+                    invalid_params.append(key)
+            
+            # Log validation results
+            if invalid_params:
+                log.warning(
+                    "Removed unsupported parameters", 
+                    provider=provider_id,
+                    model=model_name,
+                    invalid_params=invalid_params,
+                    supported_params=supported_params
+                )
+            
+            log.info(
+                "Parameter validation complete",
+                provider=provider_id,
+                model=model_name,
+                original_count=len(parameters),
+                validated_count=len(validated_params)
+            )
+            
+            return validated_params
+            
+        except Exception as e:
+            log.error("Failed to validate model parameters", error=str(e))
+            return parameters  # Graceful fallback
+
     async def handle_save_model_config(self, data):
         """Handle saving a model configuration"""
         log.info("Saving model configuration", data=data)
@@ -565,13 +621,30 @@ class ConfigPlugin:
             import uuid
             config_id = data.get("config_id") or str(uuid.uuid4())
             
+            # Validate parameters against model's supported parameters
+            parameters = data.get("parameters", {})
+            
+            # Extract provider instance ID and model name from nested structure
+            provider_data = data.get("provider", {})
+            model_data = data.get("model", {})
+            
+            provider_id = provider_data.get("provider_id")
+            model_name = model_data.get("name")
+            
+            if provider_id and model_name and parameters:
+                validated_parameters = await self._validate_model_parameters(
+                    provider_id, model_name, parameters
+                )
+            else:
+                validated_parameters = parameters
+            
             # Save model configuration
             current_config["model_configs"][config_id] = {
                 "id": config_id,
                 "name": data.get("name"),
-                "model": data.get("model"),
-                "provider": data.get("provider"),
-                "parameters": data.get("parameters", {}),
+                "model": model_data,
+                "provider": provider_data,
+                "parameters": validated_parameters,
                 "created_at": data.get("created_at") or str(datetime.datetime.now()),
                 "updated_at": str(datetime.datetime.now())
             }
@@ -612,7 +685,8 @@ class ConfigPlugin:
     async def handle_delete_model_config(self, data):
         """Handle deleting a model configuration"""
         config_id = data.get("config_id")
-        log.info("Deleting model configuration", config_id=config_id)
+        provider_id = data.get("provider_id")  # Optional, for better logging
+        log.info("Deleting model configuration", config_id=config_id, provider_id=provider_id)
         
         if not config_id:
             self.websocket_handler.queue_put({
@@ -634,6 +708,16 @@ class ConfigPlugin:
                     "data": {"message": "Configuration not found"},
                 })
                 return
+            
+            # Log configuration details before deletion
+            config_to_delete = current_config["model_configs"][config_id]
+            log.info(
+                "Deleting model configuration details",
+                config_id=config_id,
+                name=config_to_delete.get("name"),
+                provider=config_to_delete.get("provider", {}).get("provider_id"),
+                model=config_to_delete.get("model", {}).get("name")
+            )
             
             # Delete configuration
             del current_config["model_configs"][config_id]

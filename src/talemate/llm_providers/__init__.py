@@ -3,10 +3,12 @@ import os
 import importlib
 import inspect
 from pathlib import Path
-
+import litellm
 from .base_provider import BaseProvider, ProviderSetting, LiteLLMProviderConfig
 from .provider_registry import registry, ProviderRegistry
 
+litellm.set_verbose = True
+litellm.drop_params = True  # Set globally as well
 # Auto-discover and register all providers
 current_dir = Path(__file__).parent
 for file in current_dir.glob("*.py"):

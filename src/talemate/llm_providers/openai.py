@@ -52,3 +52,20 @@ class OpenAIProvider(BaseProvider):
     def format_model_name(self, model_name: str, settings: Dict[str, Any] = None) -> str:
         """OpenAI models don't need prefix"""
         return model_name
+
+    def _build_litellm_params(self, model_name: str, **kwargs):
+        """Override to add OpenAI-specific parameter handling"""
+        params = super()._build_litellm_params(model_name, **kwargs)
+        
+        # O1 models have known issues with certain parameters that litellm 
+        # incorrectly reports as supported
+        if "o1" in model_name.lower():
+            params.setdefault("additional_drop_params", []).extend(["logit_bias"])
+        
+        # Remove tool_choice if no tools are provided
+        if params.get("tool_choice") and not params.get("tools"):
+            params.pop("tool_choice", None)
+        
+        return params
+
+

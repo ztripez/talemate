@@ -62,22 +62,59 @@ class BaseProvider(ABC):
     
     def _build_litellm_params(self, model_name: str, **kwargs) -> Dict[str, Any]:
         """Build parameters for litellm call"""
+        full_model_name = f"{self.get_provider_identifier()}/{model_name}"
+        
+        # Get supported parameters for this provider/model
+        try:
+            supported_params = set(self.get_model_parameters(full_model_name))
+            # Always include core parameters that LiteLLM expects
+            supported_params.update(['model', 'messages', 'api_key', 'api_base', 'api_version', 'organization'])
+        except Exception:
+            # Fallback to common parameters if we can't get the supported list
+            supported_params = {
+                'model', 'messages', 'temperature', 'max_tokens', 'top_p', 'frequency_penalty', 
+                'presence_penalty', 'stop', 'stream', 'n', 'logprobs', 'top_logprobs',
+                'api_key', 'api_base', 'api_version', 'organization'
+            }
+        
+        # Filter kwargs to only include supported parameters with meaningful values
+        filtered_kwargs = {}
+        for key, value in kwargs.items():
+            # Skip if parameter not supported
+            if key not in supported_params:
+                continue
+            # Skip None values and empty strings
+            if value is None or value == '':
+                continue
+            # Skip empty collections
+            if isinstance(value, (list, dict)) and not value:
+                continue
+            # Skip default/invalid values for specific parameters
+            if key == 'logit_bias' and (not value or value == {}):
+                continue
+            # Skip meaningless default values that cause API errors
+            if key == 'response_format' and value == 'text':
+                continue
+            if key == 'tool_choice' and value == 'auto' and 'tools' not in kwargs:
+                continue
+            if key == 'n' and value == 1:
+                continue
+            if key == 'stream' and value is False:
+                continue
+            # Skip parameters with empty string values that are meant to be objects
+            if key in ['tools', 'functions', 'stream_options', 'modalities', 'web_search_options'] and value == '':
+                continue
+            
+            filtered_kwargs[key] = value
+        
         params = {
-            "model": f"{self.get_provider_identifier()}/{model_name}",
-            **kwargs
+            "model": full_model_name,
+            **filtered_kwargs
         }
         
-        # Add provider-specific settings
+        # Add provider-specific settings (only the standard LiteLLM ones)
         for key, value in self.config.settings.items():
-            if key == "api_key":
-                params["api_key"] = value
-            elif key == "api_base":
-                params["api_base"] = value
-            elif key == "api_version":
-                params["api_version"] = value
-            elif key == "organization":
-                params["organization"] = value
-            else:
+            if key in ['api_key', 'api_base', 'api_version', 'organization'] and value:
                 params[key] = value
         
         return params
@@ -85,7 +122,36 @@ class BaseProvider(ABC):
     async def acompletion(self, model_name: str, messages: List[Dict[str, Any]], **kwargs):
         """Make an async completion call"""
         params = self._build_litellm_params(model_name, messages=messages, **kwargs)
-        return await litellm.acompletion(**params)
+        # Enable drop_params to handle unsupported parameters gracefully
+        params.setdefault("drop_params", True)
+        
+        # Log what we're sending for debugging
+        import structlog
+        log = structlog.get_logger("litellm.provider")
+        log.debug("LiteLLM params", model=params.get("model"), drop_params=params.get("drop_params"), params=params)
+        
+
+        try:
+            return await litellm.acompletion(**params)
+        except litellm.BadRequestError as e:
+            # If we get an unsupported parameter error, try to extract the parameter name and retry
+            error_msg = str(e)
+            if "Unsupported parameter" in error_msg and "is not supported with this model" in error_msg:
+                # Extract parameter name from error message
+                import re
+                match = re.search(r"Unsupported parameter: '(\w+)'", error_msg)
+                if match:
+                    bad_param = match.group(1)
+                    log.warning(f"Removing unsupported parameter '{bad_param}' and retrying", model=model_name)
+                    # Remove the parameter and retry
+                    if bad_param in params:
+                        del params[bad_param]
+                        return await litellm.acompletion(**params)
+            raise
+        except litellm.APIConnectionError as e:
+            log.error("API connection error", error=str(e), model=model_name, api_base=params.get("api_base"))
+            raise
+
     
     def get_available_models(self, settings: Dict[str, Any] = None) -> List[str]:
         """Get available models for this provider using LiteLLM"""
@@ -222,19 +288,9 @@ class BaseProvider(ABC):
     def get_model_parameters(self, model_name: str) -> List[str]:
         """Get supported parameters for a model using LiteLLM SDK"""
         try:
-            import litellm
-            # Extract provider from model name
-            if "/" in model_name:
-                provider = model_name.split("/")[0]
-            else:
-                provider = "openai"
-            
-            try:
-                params = litellm.get_supported_openai_params(model=model_name, custom_llm_provider=provider)
-                return params if params else ["temperature", "max_tokens", "top_p"]
-            except (AttributeError, Exception):
-                return ["temperature", "max_tokens", "top_p"]
-        except Exception:
+            params = litellm.get_supported_openai_params(model=model_name, custom_llm_provider=self.get_provider_identifier())
+            return params if params else ["temperature", "max_tokens", "top_p"]
+        except (AttributeError, Exception):
             return ["temperature", "max_tokens", "top_p"]
 
 

@@ -26,6 +26,7 @@ from talemate.server import (
     world_state_manager,
     node_editor,
     package_manager,
+    chat_test,
 )
 
 __all__ = [
@@ -69,6 +70,7 @@ class WebsocketHandler(Receiver):
             devtools.DevToolsPlugin.router: devtools.DevToolsPlugin(self),
             node_editor.NodeEditorPlugin.router: node_editor.NodeEditorPlugin(self),
             package_manager.PackageManagerPlugin.router: package_manager.PackageManagerPlugin(self),
+            chat_test.ChatTestPlugin.router: chat_test.ChatTestPlugin(self),
         }
 
         # unconveniently named function, this `connect` method is called

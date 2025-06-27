@@ -422,6 +422,7 @@
                                         >
                                             Browse Models
                                         </v-btn>
+                                        <ChatTest class="ml-2" @notify="handleNotification" />
                                     </div>
                                     
                                     <v-progress-linear v-if="loadingProviders" indeterminate color="primary" class="mb-4"></v-progress-linear>
@@ -789,6 +790,7 @@
 import AppConfigPresets from './AppConfigPresets.vue';
 import AppConfigAppearance from './AppConfigAppearance.vue';
 import ModelSelector from './ModelSelector.vue';
+import ChatTest from './ChatTest.vue';
 
 export default {
     name: 'AppConfig',
@@ -796,6 +798,7 @@ export default {
         AppConfigPresets,
         AppConfigAppearance,
         ModelSelector,
+        ChatTest,
     },
     props: {
         agentStatus: Object,
@@ -884,6 +887,9 @@ export default {
     inject: ['getWebsocket', 'registerMessageHandler', 'setWaitingForInput', 'requestSceneAssets', 'requestAppConfig'],
 
     methods: {
+        handleNotification(notification) {
+            this.$emit('notify', notification);
+        },
         show(tab, page, item) {
             this.requestAppConfig();
             this.dialog = true;
@@ -1094,6 +1100,7 @@ export default {
             
             const instanceId = `${providerId}_${Date.now()}`;
             const newInstance = {
+                provider: providerId,
                 id: instanceId,
                 name: '',
                 settings: {}
