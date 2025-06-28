@@ -207,12 +207,20 @@ class ChatTestPlugin:
                 response_metadata = {}
                 
                 try:
-                    # Call provider with streaming
-                    response = await provider.acompletion(
-                        model_name=model_name,
-                        messages=payload.messages,
+                    # Build LiteLLM parameters using provider
+                    litellm_params = provider._build_litellm_params(
+                        model_name, 
+                        messages=payload.messages, 
                         **clean_params
                     )
+                    
+                    # Ensure stream is set to True
+                    litellm_params["stream"] = True
+                    
+                    log.debug("LiteLLM params for streaming", params=litellm_params)
+                    
+                    # Call LiteLLM directly with streaming
+                    response = await litellm.acompletion(**litellm_params)
                     
                     # Check if we got a streaming response or a regular response
                     if hasattr(response, '__aiter__'):
@@ -266,11 +274,13 @@ class ChatTestPlugin:
                 except Exception as e:
                     log.error("Streaming failed", error=str(e))
                     # Fall back to non-streaming
-                    response = await provider.acompletion(
-                        model_name=model_name,
-                        messages=payload.messages,
-                        **{k: v for k, v in clean_params.items() if k != 'stream'}
+                    clean_params_no_stream = {k: v for k, v in clean_params.items() if k != 'stream'}
+                    litellm_params = provider._build_litellm_params(
+                        model_name, 
+                        messages=payload.messages, 
+                        **clean_params_no_stream
                     )
+                    response = await litellm.acompletion(**litellm_params)
                     content = response.choices[0].message.content
                     self.websocket_handler.queue_put({
                         "type": "chat_test",
@@ -284,11 +294,12 @@ class ChatTestPlugin:
                     })
             else:
                 # Non-streaming response
-                response = await provider.acompletion(
-                    model_name=model_name,
-                    messages=payload.messages,
+                litellm_params = provider._build_litellm_params(
+                    model_name, 
+                    messages=payload.messages, 
                     **clean_params
                 )
+                response = await litellm.acompletion(**litellm_params)
                 
                 # Extract response content and metadata
                 content = response.choices[0].message.content

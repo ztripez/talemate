@@ -95,7 +95,7 @@ class KoboldCppProvider(BaseProvider):
         
         # Add all parameters that KoboldCpp supports
         for key, value in kwargs.items():
-            if key in supported_params or key in ["messages"]:
+            if key in supported_params or key in ["messages", "stream"]:
                 params[key] = value
         
         # Ensure we have the dummy API key
@@ -112,16 +112,10 @@ class KoboldCppProvider(BaseProvider):
             params = self._build_litellm_params(model_name, messages=messages, **kwargs)
             params["stream"] = True
             
-            # Log streaming attempt
-            import structlog
-            log = structlog.get_logger("koboldcpp.provider")
-            log.info("Attempting streaming completion", model=model_name, api_base=params.get("api_base"))
-            
             try:
                 # Return the streaming response directly from litellm
                 return await litellm.acompletion(**params)
             except Exception as e:
-                log.warning(f"Streaming failed, falling back to non-streaming: {str(e)}")
                 # Fall back to non-streaming
                 kwargs_copy = kwargs.copy()
                 kwargs_copy.pop("stream", None)
@@ -181,9 +175,9 @@ class KoboldCppLiteLLM(CustomLLM):
         # Use api_base from kwargs if provided, otherwise fall back to self.base_url
         api_base = kwargs.get("api_base", self.base_url).rstrip("/")
         payload = self._build_payload(messages, max_tokens, optional_params)
-        s = requests.get(
+        s = requests.post(
             f"{api_base}/api/extra/generate/stream",
-            params={"data": json.dumps(payload)},
+            json=payload,
             stream=True,
             timeout=optional_params.get("timeout", None),
         )  # SSE endpoint
@@ -239,46 +233,26 @@ class KoboldCppLiteLLM(CustomLLM):
         # Use api_base from kwargs if provided, otherwise fall back to self.base_url
         api_base = kwargs.get("api_base", self.base_url).rstrip("/")
         
-        # Debug logging
-        import structlog
-        log = structlog.get_logger("koboldcpp.handler")
-        log.info("KoboldCppLiteLLM.astreaming called", 
-                 api_base=api_base, 
-                 self_base_url=self.base_url,
-                 kwargs_keys=list(kwargs.keys()),
-                 model=model)
-        
         payload = self._build_payload(messages, max_tokens, optional_params)
         
-        log.info("Streaming request payload", 
-                 payload=payload,
-                 url=f"{api_base}/api/extra/generate/stream")
-        
         async with httpx.AsyncClient(timeout=None) as client:
-            # Try POST method for streaming (some KoboldCpp versions use POST)
+            # POST method for streaming
             async with client.stream(
                 "POST",
                 f"{api_base}/api/extra/generate/stream",
                 json=payload,
             ) as resp:
-                log.info("Streaming response started", 
-                         status_code=resp.status_code,
-                         headers=dict(resp.headers))
-                
                 # Check if streaming endpoint exists
                 if resp.status_code != 200:
-                    log.error(f"KoboldCpp streaming endpoint returned {resp.status_code}. Response: {await resp.aread()}")
                     raise Exception(f"KoboldCpp streaming endpoint not available (status: {resp.status_code})")
                 
                 idx = 0
                 async for raw in resp.aiter_lines():
-                    log.debug("Received line", raw=raw)
                     if not raw or not raw.startswith("data:"):
                         continue
                     tok = json.loads(raw[5:].strip())
                     if tok.get("token") is None:
                         continue
-                    log.debug("Yielding token", token=tok["token"], idx=idx)
                     yield {
                         "index": idx,
                         "text": tok["token"],
