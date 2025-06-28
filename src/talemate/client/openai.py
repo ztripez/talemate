@@ -142,7 +142,18 @@ class OpenAIClient(EndpointOverrideMixin, ClientBase):
         defaults: Defaults = Defaults()
         extra_fields: dict[str, ExtraField] = endpoint_override_extra_fields()
     def __init__(self, model="gpt-4o", **kwargs):
-        self.model_name = model
+        # Handle model_config initialization
+        model_config = kwargs.get('model_config')
+        if model_config:
+            # Extract model name from config
+            self.model_name = model_config.get('model_name', model)
+            
+            # OpenAI uses the provider's API key
+            provider_config = load_config(as_model=True)
+            kwargs['api_key'] = model_config.get('api_key') or provider_config.openai.api_key
+        else:
+            self.model_name = model
+            
         self.api_key_status = None
         self._reconfigure_endpoint_override(**kwargs)
         self.config = load_config()

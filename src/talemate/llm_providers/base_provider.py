@@ -157,7 +157,7 @@ class BaseProvider(ABC):
         """Format model name for LiteLLM - override in subclasses if needed"""
         return f"{self.get_provider_identifier()}/{model_name}"
     
-    def get_models_with_capabilities(self, settings: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    def get_models_with_capabilities(self, settings: Dict[str, Any] = None, group_by: str = None) -> Any:
         """Get models with capabilities for this provider"""
         models = self.get_available_models(settings)
         enhanced_models = []
@@ -186,7 +186,16 @@ class BaseProvider(ABC):
                 "parameters": self.get_model_parameters(full_model_name)
             })
         
+        # If grouping requested, delegate to provider-specific grouping method
+        if group_by:
+            return self.group_models(enhanced_models, group_by)
+        
         return enhanced_models
+    
+    def group_models(self, models: List[Dict[str, Any]], group_by: str) -> Any:
+        """Group models by specified criteria. Override in subclasses for custom grouping."""
+        # Default implementation returns flat list (no grouping)
+        return models
     
     def format_display_name(self, model_name: str) -> str:
         """Format model name for display - make it more readable"""

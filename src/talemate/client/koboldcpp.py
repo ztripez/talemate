@@ -85,6 +85,15 @@ class KoboldCppClient(ClientBase):
         title: str = "KoboldCpp"
         enable_api_auth: bool = True
         defaults: KoboldCppClientDefaults = KoboldCppClientDefaults()
+    
+    def __init__(self, **kwargs):
+        # Handle model_config initialization
+        model_config = kwargs.get('model_config')
+        if model_config:
+            # For KoboldCpp, extract API URL from model config
+            kwargs['api_url'] = model_config.get('api_url', 'http://localhost:5001')
+            # Model name is already set in parent class
+        super().__init__(**kwargs)
 
     @property
     def request_headers(self):

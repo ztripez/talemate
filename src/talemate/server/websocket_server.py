@@ -112,20 +112,105 @@ class WebsocketHandler(Receiver):
                 plugin.disconnect()
 
     async def connect_llm_clients(self):
+        # First, create clients from saved model configs
+        config = load_config(as_model=True)
+        for config_id, model_config_data in config.model_configs.items():
+            try:
+                # Extract provider info from the nested structure
+                provider_info = model_config_data.get("provider", {})
+                provider_name = provider_info.get("provider_name", "")
+                
+                # Extract model info
+                model_info = model_config_data.get("model", {})
+                model_name = model_info.get("name", "")
+                full_name = model_info.get("full_name", "")
+                
+                # Create a user-friendly client name
+                # Use model name if available, otherwise fall back to config_id
+                if model_name:
+                    client_name = f"{provider_name} - {model_name}"
+                else:
+                    client_name = f"{provider_name} - {config_id}"
+                
+                # Map provider to client type
+                client_type_map = {
+                    "OpenRouter": "openrouter",
+                    "OpenAI": "openai",
+                    "Anthropic": "anthropic",
+                    "Groq": "groq",
+                    "Google": "google",
+                    "Mistral": "mistral",
+                    "Deepseek": "deepseek",
+                    "Cohere": "cohere",
+                    "KoboldCpp": "koboldcpp",
+                    "Ollama": "ollama",
+                    "LM Studio": "lmstudio",
+                    "Text Generation WebUI": "textgenwebui",
+                    "TabbyAPI": "tabbyapi",
+                    "OpenAI Compatible": "openai_compat",
+                }
+                
+                client_type = client_type_map.get(provider_name)
+                
+                if not client_type:
+                    log.warning(f"Unknown provider type: {provider_name}")
+                    continue
+                
+                # Build model config for client initialization
+                client_model_config = {
+                    "id": config_id,
+                    "model_name": model_name,
+                    "model_id": full_name,
+                    "provider": provider_name,
+                    "max_tokens": model_config_data.get("parameters", {}).get("max_tokens", 4096),
+                    "capabilities": model_info.get("capabilities", {}),
+                }
+                
+                # Create client from model config using the friendly name
+                client = instance.get_client(
+                    name=client_name,
+                    type=client_type,
+                    model_config=client_model_config,
+                    enabled=True
+                )
+                
+                # Use config_id as key but store the friendly name
+                self.llm_clients[config_id] = {
+                    "client": client,
+                    "name": client_name,
+                    "type": client_type,
+                    "enabled": True,
+                }
+                
+                log.info(
+                    "Created client from model config",
+                    client_name=client_name,
+                    client_type=client_type,
+                    model=model_name,
+                )
+            except Exception as e:
+                log.error(f"Error creating client from model config {config_id}: {e}")
+                import traceback
+                log.error(traceback.format_exc())
+                continue
+        
+        # Then handle any legacy manual clients if they still exist
         client = None
-
         for client_name, client_config in self.llm_clients.items():
+            if "client" in client_config:
+                # Client already created from model config
+                continue
+                
             try:
                 client = self.llm_clients[client_name]["client"] = instance.get_client(
                     **client_config
                 )
             except TypeError as e:
-                raise
                 log.error("Error connecting to client", client_name=client_name, e=e)
                 continue
 
             log.info(
-                "Configured client",
+                "Configured legacy client",
                 client_name=client_name,
                 client_type=client.client_type,
             )

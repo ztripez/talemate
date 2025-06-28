@@ -415,17 +415,16 @@
                                     
                                     <div class="mb-4 d-flex align-center">
                                         <!-- Searchable dropdown for adding providers -->
-                                        <v-autocomplete
+                                        <v-select
                                             v-model="selectedProvider"
                                             :items="getAvailableProviders()"
                                             :loading="loadingProviders"
                                             item-title="name"
                                             item-value="identifier"
                                             label="Add a provider"
-                                            placeholder="Search providers..."
+                                            placeholder="Select a provider..."
                                             density="compact"
                                             variant="outlined"
-                                            prepend-inner-icon="mdi-magnify"
                                             clearable
                                             hide-details
                                             class="mr-2"
@@ -435,13 +434,17 @@
                                             <template v-slot:item="{ props, item }">
                                                 <v-list-item v-bind="props">
                                                     <template v-slot:prepend>
-                                                        <v-icon>mdi-cloud</v-icon>
+                                                        <v-icon>{{ getProviderIcon(item.raw.name) }}</v-icon>
                                                     </template>
-                                                    <v-list-item-title>{{ item.raw.name }}</v-list-item-title>
-                                                    <v-list-item-subtitle>{{ item.raw.identifier }}</v-list-item-subtitle>
                                                 </v-list-item>
                                             </template>
-                                        </v-autocomplete>
+                                            <template v-slot:selection="{ item }">
+                                                <div class="d-flex align-center">
+                                                    <v-icon size="small" class="mr-2">{{ getProviderIcon(item.raw.name) }}</v-icon>
+                                                    <span>{{ item.raw.name }}</span>
+                                                </div>
+                                            </template>
+                                        </v-select>
                                         
                                         <v-btn
                                             color="primary"
@@ -731,6 +734,27 @@ export default {
     inject: ['getWebsocket', 'registerMessageHandler', 'setWaitingForInput', 'requestSceneAssets', 'requestAppConfig'],
 
     methods: {
+        getProviderIcon(providerName) {
+            const iconMap = {
+                'OpenRouter': 'mdi-router',
+                'OpenAI': 'mdi-openid',
+                'Anthropic': 'mdi-robot-happy',
+                'Google': 'mdi-google',
+                'Cohere': 'mdi-cloud-outline',
+                'Groq': 'mdi-chip',
+                'Mistral': 'mdi-weather-windy',
+                'Perplexity': 'mdi-help-network',
+                'Together': 'mdi-account-group',
+                'Replicate': 'mdi-content-copy',
+                'Hugging Face': 'mdi-emoticon-happy',
+                'Anyscale': 'mdi-scale-balance',
+                'Deepinfra': 'mdi-server',
+                'AI21': 'mdi-numeric-2-box',
+                'Manual Configuration': 'mdi-cog',
+                'OpenAI Compatible': 'mdi-api'
+            }
+            return iconMap[providerName] || 'mdi-cloud'
+        },
         handleNotification(notification) {
             this.$emit('notify', notification);
         },

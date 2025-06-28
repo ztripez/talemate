@@ -45,12 +45,15 @@ def get_client(name: str, *create_args, **create_kwargs):
     client = CLIENTS.get(name)
 
     system_prompts = create_kwargs.pop("system_prompts", None)
+    model_config = create_kwargs.get("model_config", None)
 
     if client:
         if create_kwargs:
             if system_prompts:
                 client.set_system_prompts(system_prompts) 
-            client.reconfigure(**create_kwargs)
+            # Don't reconfigure if we have a model_config, as it was already configured
+            if not model_config:
+                client.reconfigure(**create_kwargs)
         return client
 
     if "type" in create_kwargs:

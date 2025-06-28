@@ -104,7 +104,22 @@ class OpenRouterClient(ClientBase):
         defaults: Defaults = Defaults()
 
     def __init__(self, model=None, **kwargs):
-        self.model_name = model or DEFAULT_MODEL
+        # Handle model_config initialization
+        model_config = kwargs.get('model_config')
+        if model_config:
+            # Extract model ID from config (e.g., "openrouter/anthropic/claude-3-opus" -> "anthropic/claude-3-opus")
+            model_id = model_config.get('model_id', '')
+            if model_id.startswith('openrouter/'):
+                model_id = model_id[len('openrouter/'):]
+            
+            self.model_name = model_id or model_config.get('model_name', DEFAULT_MODEL)
+            
+            # OpenRouter uses the provider's API key
+            provider_config = load_config(as_model=True)
+            kwargs['api_key'] = model_config.get('api_key') or provider_config.openrouter.api_key
+        else:
+            self.model_name = model or DEFAULT_MODEL
+            
         self.api_key_status = None
         self.config = load_config()
         self._models_fetched = False
@@ -118,6 +133,10 @@ class OpenRouterClient(ClientBase):
 
     @property
     def openrouter_api_key(self):
+        # First check if api_key was set during initialization (from model config)
+        if hasattr(self, 'api_key') and self.api_key:
+            return self.api_key
+        # Otherwise fall back to config file
         return self.config.get("openrouter", {}).get("api_key")
 
     @property

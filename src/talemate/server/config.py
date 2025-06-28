@@ -402,6 +402,24 @@ class ConfigPlugin:
             if "litellm_providers" in current_config and instance_id in current_config["litellm_providers"]:
                 del current_config["litellm_providers"][instance_id]
                 
+                # Clean up orphaned model configurations that reference this provider
+                model_configs_to_delete = []
+                if "model_configs" in current_config:
+                    for config_id, config_data in current_config["model_configs"].items():
+                        provider_data = config_data.get("provider", {})
+                        if provider_data.get("provider_id") == instance_id:
+                            model_configs_to_delete.append(config_id)
+                    
+                    # Remove orphaned model configs
+                    for config_id in model_configs_to_delete:
+                        log.info(
+                            "Removing orphaned model configuration",
+                            config_id=config_id,
+                            config_name=current_config["model_configs"][config_id].get("name"),
+                            provider_instance=instance_id
+                        )
+                        del current_config["model_configs"][config_id]
+                
                 # Save config to file
                 save_config(current_config)
                 
@@ -409,12 +427,17 @@ class ConfigPlugin:
                 self.websocket_handler.config = current_config
                 
                 # Send success response
+                cleanup_message = f"Provider instance deleted successfully"
+                if model_configs_to_delete:
+                    cleanup_message += f" (cleaned up {len(model_configs_to_delete)} orphaned model configurations)"
+                
                 self.websocket_handler.queue_put({
                     "type": "config",
                     "action": "provider_instance_delete_complete",
                     "data": {
                         "instance_id": instance_id,
-                        "message": "Provider instance deleted successfully"
+                        "message": cleanup_message,
+                        "cleaned_configs": len(model_configs_to_delete)
                     },
                 })
                 
@@ -443,6 +466,9 @@ class ConfigPlugin:
         """Handle request for model selector with provider grouping and capabilities"""
         log.info("Requesting model selector information")
         
+        # Check if grouping is requested
+        group_by = data.get("group_by", None)
+        
         try:
             # Load current config to get configured providers
             current_config = load_config()
@@ -465,21 +491,30 @@ class ConfigPlugin:
                     provider_name = provider_class.get_provider_name()
                     # Create provider instance to get models with capabilities
                     provider_instance = provider_class()
-                    models = provider_instance.get_models_with_capabilities(settings)
+                    
+                    # Get models with optional grouping
+                    result = provider_instance.get_models_with_capabilities(settings, group_by=group_by)
+                    
+                    if isinstance(result, dict) and result.get("has_subgroups"):
+                        # Provider returned a nested structure with subgroups
+                        model_groups.append({
+                            "provider_id": instance_id,
+                            "provider_name": provider_name,
+                            "subgroups": result.get("subgroups", []),
+                            "has_subgroups": True
+                        })
+                    elif isinstance(result, list) and result:
+                        # Regular flat list of models
+                        sorted_models = sorted(result, key=lambda m: m.get("display_name", m.get("name", "")).lower())
+                        model_groups.append({
+                            "provider_id": instance_id,
+                            "provider_name": provider_name,
+                            "models": sorted_models,
+                            "has_subgroups": False
+                        })
                 else:
                     # Fallback to instance name if provider not found
                     provider_name = settings.get("instance_name", instance_id)
-                    models = []
-                
-                if models:
-                    # Sort models by display name within each provider
-                    sorted_models = sorted(models, key=lambda m: m.get("display_name", m.get("name", "")).lower())
-                    
-                    model_groups.append({
-                        "provider_id": instance_id,
-                        "provider_name": provider_name,
-                        "models": sorted_models
-                    })
             
             # Sort provider groups by provider name
             sorted_model_groups = sorted(model_groups, key=lambda g: g.get("provider_name", "").lower())

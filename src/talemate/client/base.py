@@ -213,17 +213,35 @@ class ClientBase:
         name: str = None,
         **kwargs,
     ):
-        self.api_url = api_url
-        self.name = name or self.client_type
+        # Pop model_config from kwargs to avoid passing it to other methods
+        model_config = kwargs.pop('model_config', None)
+        
+        # Handle model_config initialization
+        if model_config:
+            self.model_config = model_config
+            self.name = name or model_config.get('id', self.client_type)
+            self.model_name = model_config.get('model_name')
+            self.api_key = model_config.get('api_key')
+            self.api_url = model_config.get('api_url', api_url)
+            self.max_token_length = model_config.get('max_tokens', 8192)
+            
+            # Extract any provider-specific settings
+            if provider_settings := model_config.get('provider_settings'):
+                kwargs.update(provider_settings)
+        else:
+            # Existing initialization
+            self.api_url = api_url
+            self.name = name or self.client_type
+            if "max_token_length" in kwargs:
+                self.max_token_length = (
+                    int(kwargs["max_token_length"]) if kwargs["max_token_length"] else 8192
+                )
+        
         self.auto_determine_prompt_template_attempt = None
         self.log = structlog.get_logger(f"client.{self.client_type}")
         self.double_coercion = kwargs.get("double_coercion", None)
         self._reconfigure_common_parameters(**kwargs)
         self.enabled = kwargs.get("enabled", True)
-        if "max_token_length" in kwargs:
-            self.max_token_length = (
-                int(kwargs["max_token_length"]) if kwargs["max_token_length"] else 8192
-            )
             
         self.set_client(max_token_length=self.max_token_length)
 

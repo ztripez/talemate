@@ -8,6 +8,16 @@
         <v-btn
           variant="text"
           size="small"
+          @click="refreshModels"
+          :disabled="loading"
+          class="mr-2"
+        >
+          <v-icon :class="{ 'mdi-spin': loading }">mdi-refresh</v-icon>
+          <v-tooltip activator="parent" location="bottom">Refresh model list</v-tooltip>
+        </v-btn>
+        <v-btn
+          variant="text"
+          size="small"
           @click="openSavedConfigs"
           :disabled="loading"
         >
@@ -27,7 +37,9 @@
         <v-row>
           <v-col cols="12" class="pb-0">
             <v-text-field
-              v-model="searchQuery"
+              v-model="searchInput"
+              @input="onSearchInput"
+              @click:clear="onSearchClear"
               prepend-inner-icon="mdi-magnify"
               label="Search models..."
               clearable
@@ -35,6 +47,72 @@
               variant="outlined"
               hide-details
             ></v-text-field>
+          </v-col>
+        </v-row>
+        
+        <v-row class="mt-1">
+          <v-col cols="12" class="py-1">
+            <div class="d-flex align-center gap-2">
+              <span class="text-caption text-disabled">Filters:</span>
+              <v-btn-toggle
+                v-model="activeFilters"
+                multiple
+                density="compact"
+                variant="text"
+                divided
+                color="primary"
+              >
+                <v-btn
+                  value="vision"
+                  size="x-small"
+                >
+                  <v-icon size="x-small" class="mr-1">mdi-eye-outline</v-icon>
+                  <span class="text-caption">Vision</span>
+                </v-btn>
+                <v-btn
+                  value="reasoning"
+                  size="x-small"
+                >
+                  <v-icon size="x-small" class="mr-1">mdi-head-cog-outline</v-icon>
+                  <span class="text-caption">Reasoning</span>
+                </v-btn>
+                <v-btn
+                  value="function_calling"
+                  size="x-small"
+                >
+                  <v-icon size="x-small" class="mr-1">mdi-function-variant</v-icon>
+                  <span class="text-caption">Functions</span>
+                </v-btn>
+                <v-btn
+                  value="web_search"
+                  size="x-small"
+                >
+                  <v-icon size="x-small" class="mr-1">mdi-web</v-icon>
+                  <span class="text-caption">Search</span>
+                </v-btn>
+              </v-btn-toggle>
+              <v-spacer></v-spacer>
+              <v-fade-transition>
+                <v-progress-circular
+                  v-if="filtering"
+                  size="16"
+                  width="2"
+                  indeterminate
+                  color="primary"
+                  class="mr-2"
+                ></v-progress-circular>
+              </v-fade-transition>
+              <v-fade-transition>
+                <v-btn
+                  v-if="activeFilters.length > 0"
+                  size="x-small"
+                  variant="text"
+                  @click="activeFilters = []"
+                >
+                  Clear filters
+                </v-btn>
+              </v-fade-transition>
+            </div>
           </v-col>
         </v-row>
         
@@ -69,12 +147,110 @@
                     <v-icon class="mr-2">{{ getProviderIcon(group.provider_name) }}</v-icon>
                     <span class="text-h6">{{ group.provider_name }}</span>
                     <v-spacer></v-spacer>
-                    <v-chip size="small" color="secondary" class="mr-2">{{ group.models.length }} models</v-chip>
+                    <v-chip size="small" color="secondary" class="mr-2">
+                      {{ getModelCount(group) }} models
+                    </v-chip>
                   </div>
                 </v-expansion-panel-title>
                 
                 <v-expansion-panel-text>
-                  <v-list density="compact" class="pa-0">
+                  <!-- Handle providers with subgroups (nested structure) -->
+                  <div v-if="group.has_subgroups && group.subgroups">
+                    <v-expansion-panels v-model="expandedSubPanels[group.provider_id]" multiple>
+                      <v-expansion-panel
+                        v-for="(subgroup, subIndex) in group.subgroups"
+                        :key="subgroup.group_id"
+                        :value="subIndex"
+                        elevation="1"
+                        class="mb-1"
+                      >
+                        <v-expansion-panel-title>
+                          <div class="d-flex align-center w-100">
+                            <v-icon size="small" class="mr-2">{{ getSubProviderIcon(subgroup.group_name) }}</v-icon>
+                            <span class="text-body-1">{{ subgroup.group_name }}</span>
+                            <v-spacer></v-spacer>
+                            <v-chip size="x-small" variant="tonal" class="mr-2">
+                              {{ subgroup.models.length }} models
+                            </v-chip>
+                          </div>
+                        </v-expansion-panel-title>
+                        
+                        <v-expansion-panel-text>
+                          <v-list density="compact" class="pa-0">
+                            <v-list-item
+                              v-for="model in subgroup.models"
+                              :key="model.full_name"
+                              @click="selectModel(model, group)"
+                              :ripple="true"
+                              class="model-list-item mb-1"
+                            >
+                              <template v-slot:prepend>
+                                <v-icon size="small">mdi-language-markdown-outline</v-icon>
+                              </template>
+                              
+                              <v-list-item-title>
+                                <span v-html="highlightSearchTerm(model.display_name || model.name)"></span>
+                              </v-list-item-title>
+                              
+                              <v-list-item-subtitle>
+                                <div v-if="hasCapabilities(model)" class="d-flex flex-wrap gap-1 mt-1">
+                                  <v-chip 
+                                    v-if="model.capabilities.vision" 
+                                    size="x-small" 
+                                    variant="tonal"
+                                  >
+                                    <v-icon start size="x-small">mdi-eye</v-icon>
+                                    Vision
+                                  </v-chip>
+                                  <v-chip 
+                                    v-if="model.capabilities.reasoning" 
+                                    size="x-small" 
+                                    variant="tonal"
+                                  >
+                                    <v-icon start size="x-small">mdi-brain</v-icon>
+                                    Reasoning
+                                  </v-chip>
+                                  <v-chip 
+                                    v-if="model.capabilities.function_calling" 
+                                    size="x-small" 
+                                    variant="tonal"
+                                  >
+                                    <v-icon start size="x-small">mdi-function</v-icon>
+                                    Functions
+                                  </v-chip>
+                                  <v-chip 
+                                    v-if="model.capabilities.web_search" 
+                                    size="x-small" 
+                                    variant="tonal"
+                                  >
+                                    <v-icon start size="x-small">mdi-web</v-icon>
+                                    Search
+                                  </v-chip>
+                                </div>
+                                <div v-else class="d-flex flex-wrap gap-1 mt-1">
+                                  <v-chip 
+                                    size="x-small" 
+                                    variant="tonal"
+                                    color="grey"
+                                  >
+                                    <v-icon start size="x-small">mdi-text</v-icon>
+                                    Text
+                                  </v-chip>
+                                </div>
+                              </v-list-item-subtitle>
+                              
+                              <template v-slot:append>
+                                <v-icon size="small">mdi-chevron-right</v-icon>
+                              </template>
+                            </v-list-item>
+                          </v-list>
+                        </v-expansion-panel-text>
+                      </v-expansion-panel>
+                    </v-expansion-panels>
+                  </div>
+                  
+                  <!-- Handle providers without subgroups (flat list) -->
+                  <v-list v-else density="compact" class="pa-0">
                     <v-list-item
                       v-for="model in group.models"
                       :key="model.full_name"
@@ -87,7 +263,7 @@
                       </template>
                       
                       <v-list-item-title>
-                        {{ model.display_name || model.name }}
+                        <span v-html="highlightSearchTerm(model.display_name || model.name)"></span>
                       </v-list-item-title>
                       
                       <v-list-item-subtitle>
@@ -125,9 +301,16 @@
                             Search
                           </v-chip>
                         </div>
-                        <span v-else class="text-caption text-grey">
-                          Standard text model
-                        </span>
+                        <div v-else class="d-flex flex-wrap gap-1 mt-1">
+                          <v-chip 
+                            size="x-small" 
+                            variant="tonal"
+                            color="grey"
+                          >
+                            <v-icon start size="x-small">mdi-text</v-icon>
+                            Text
+                          </v-chip>
+                        </div>
                       </v-list-item-subtitle>
                       
                       <template v-slot:append>
@@ -480,7 +663,7 @@ import { getParameterConfig, parameterRegistry } from './ModelParameterRegistry.
 
 export default {
   name: 'ModelSelector',
-  inject: ['getWebsocket'],
+  inject: ['getWebsocket', 'registerMessageHandler'],
   props: {
     modelValue: {
       type: Boolean,
@@ -491,8 +674,10 @@ export default {
   data() {
     return {
       searchQuery: '',
+      searchInput: '', // Separate input value for immediate updates
       modelGroups: [],
       loading: false,
+      filtering: false, // Track filtering state
       error: null,
       hoveredModel: null,
       configDialog: false,
@@ -502,12 +687,16 @@ export default {
       modelConfig: {},
       chipInput: {},
       expandedPanels: [],
+      expandedSubPanels: {}, // Track expanded state for subgroups
       savedConfigsDialog: false,
       savedConfigs: [],
       loadingSavedConfigs: false,
       deleteDialog: false,
       configToDelete: null,
-      editingConfig: null
+      editingConfig: null,
+      activeFilters: [], // Track active capability filters
+      filteredCache: null, // Cache filtered results
+      filterTimeout: null // Debounce filtering
     }
   },
   computed: {
@@ -520,18 +709,26 @@ export default {
       }
     },
     filteredModelGroups() {
-      if (!this.searchQuery) {
+      // Return cached results if filtering is in progress
+      if (this.filtering && this.filteredCache !== null) {
+        return this.filteredCache
+      }
+      
+      const hasSearchQuery = !!this.searchQuery
+      const hasFilters = this.activeFilters.length > 0
+      
+      if (!hasSearchQuery && !hasFilters) {
+        this.filteredCache = this.modelGroups
         return this.modelGroups
       }
       
-      const query = this.searchQuery.toLowerCase()
-      return this.modelGroups.map(group => ({
-        ...group,
-        models: group.models.filter(model => 
-          model.name.toLowerCase().includes(query) ||
-          model.full_name.toLowerCase().includes(query)
-        )
-      })).filter(group => group.models.length > 0)
+      // If we have a cache, return it while new filtering happens
+      if (this.filteredCache !== null) {
+        return this.filteredCache
+      }
+      
+      // Otherwise return original until filtering completes
+      return this.modelGroups
     },
     savedConfigsCount() {
       return this.savedConfigs.length
@@ -543,11 +740,30 @@ export default {
         if (this.modelGroups.length === 0) {
           this.loadModels()
         } else {
+          // Trigger filtering if we have search or filters
+          if (this.searchQuery || this.activeFilters.length > 0) {
+            this.performFiltering()
+          }
           // Expand all panels when dialog opens
           this.expandedPanels = this.filteredModelGroups.map((_, index) => index)
         }
         // Also load saved configs to show count
         this.loadSavedConfigsSilently()
+      }
+    },
+    searchQuery(newVal) {
+      if (newVal) {
+        // When searching, expand all panels and subpanels to show results
+        this.expandAllPanels()
+      }
+      // Trigger filtering
+      this.performFiltering()
+    },
+    activeFilters() {
+      this.debouncedFilter()
+      // When filters change, expand panels to show filtered results
+      if (this.activeFilters.length > 0) {
+        this.expandAllPanels()
       }
     }
   },
@@ -557,11 +773,12 @@ export default {
       this.error = null
       
       try {
-        // Request model data from backend
+        // Request model data from backend with grouping for OpenRouter
         const ws = this.getWebsocket()
         ws.send(JSON.stringify({
           type: 'config',
-          action: 'request_model_selector'
+          action: 'request_model_selector',
+          group_by: 'provider'  // Request provider-based grouping
         }))
         
         // Wait for response
@@ -605,6 +822,202 @@ export default {
         const ws = this.getWebsocket()
         ws.addEventListener('message', handler)
       })
+    },
+    
+    // Add method to refresh model data
+    refreshModelData() {
+      this.loadModels()
+    },
+    
+    // Method for the refresh button
+    refreshModels() {
+      // Clear search query and filters to show all models
+      this.searchQuery = ''
+      this.searchInput = ''
+      this.activeFilters = []
+      // Force reload of models
+      this.loadModels()
+    },
+    
+    onSearchInput() {
+      // Clear existing timeout
+      if (this.filterTimeout) {
+        clearTimeout(this.filterTimeout)
+      }
+      
+      // Set new timeout for debounced search
+      this.filterTimeout = setTimeout(() => {
+        this.searchQuery = this.searchInput
+      }, 300)
+    },
+    
+    onSearchClear() {
+      this.searchInput = ''
+      this.searchQuery = ''
+      if (this.filterTimeout) {
+        clearTimeout(this.filterTimeout)
+      }
+    },
+    
+    expandAllPanels() {
+      // Expand all main panels
+      this.expandedPanels = this.filteredModelGroups.map((_, index) => index)
+      
+      // Expand all subpanels for groups with subgroups
+      this.filteredModelGroups.forEach(group => {
+        if (group.has_subgroups && group.subgroups) {
+          // In Vue 3, we can directly assign to reactive properties
+          this.expandedSubPanels[group.provider_id] = group.subgroups.map((_, index) => index)
+        }
+      })
+    },
+    
+    highlightSearchTerm(text) {
+      if (!this.searchQuery || !text) {
+        return text
+      }
+      
+      const query = this.searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // Escape special regex chars
+      const regex = new RegExp(`(${query})`, 'gi')
+      return text.replace(regex, '<mark>$1</mark>')
+    },
+    
+    debouncedFilter() {
+      // Clear existing timeout
+      if (this.filterTimeout) {
+        clearTimeout(this.filterTimeout)
+      }
+      
+      // Set new timeout
+      this.filterTimeout = setTimeout(() => {
+        this.performFiltering()
+      }, 300) // 300ms debounce
+    },
+    
+    async performFiltering() {
+      // Don't filter if already filtering
+      if (this.filtering) return
+      
+      this.filtering = true
+      
+      // Use requestAnimationFrame to ensure UI remains responsive
+      await new Promise(resolve => requestAnimationFrame(resolve))
+      
+      const hasSearchQuery = !!this.searchQuery
+      const hasFilters = this.activeFilters.length > 0
+      
+      if (!hasSearchQuery && !hasFilters) {
+        this.filteredCache = this.modelGroups
+        this.filtering = false
+        return
+      }
+      
+      const query = this.searchQuery ? this.searchQuery.toLowerCase() : ''
+      
+      // Process in chunks to prevent blocking
+      const processGroups = async () => {
+        const results = []
+        
+        for (let i = 0; i < this.modelGroups.length; i++) {
+          const group = this.modelGroups[i]
+          
+          // Yield control back to browser more frequently for large lists
+          if (i % 2 === 0) {
+            await new Promise(resolve => {
+              if ('requestIdleCallback' in window) {
+                requestIdleCallback(resolve, { timeout: 16 })
+              } else {
+                setTimeout(resolve, 0)
+              }
+            })
+          }
+          
+          if (group.has_subgroups && group.subgroups) {
+            // Filter models within subgroups
+            const filteredSubgroups = []
+            
+            for (const subgroup of group.subgroups) {
+              const filteredModels = subgroup.models.filter(model => {
+                // Apply search filter
+                const matchesSearch = !hasSearchQuery || (
+                  model.name.toLowerCase().includes(query) ||
+                  model.full_name.toLowerCase().includes(query) ||
+                  (model.display_name && model.display_name.toLowerCase().includes(query))
+                )
+                
+                // Apply capability filters
+                const matchesFilters = !hasFilters || this.activeFilters.every(filter => 
+                  model.capabilities && model.capabilities[filter]
+                )
+                
+                return matchesSearch && matchesFilters
+              })
+              
+              if (filteredModels.length > 0) {
+                filteredSubgroups.push({
+                  ...subgroup,
+                  models: filteredModels
+                })
+              }
+            }
+            
+            // Add group if it has matching models
+            if (filteredSubgroups.length > 0) {
+              results.push({
+                ...group,
+                subgroups: filteredSubgroups
+              })
+            }
+          } else if (group.models) {
+            // Regular flat list filtering
+            const filteredModels = group.models.filter(model => {
+              // Apply search filter
+              const matchesSearch = !hasSearchQuery || (
+                model.name.toLowerCase().includes(query) ||
+                model.full_name.toLowerCase().includes(query) ||
+                (model.display_name && model.display_name.toLowerCase().includes(query))
+              )
+              
+              // Apply capability filters
+              const matchesFilters = !hasFilters || this.activeFilters.every(filter => 
+                model.capabilities && model.capabilities[filter]
+              )
+              
+              return matchesSearch && matchesFilters
+            })
+            
+            if (filteredModels.length > 0) {
+              results.push({
+                ...group,
+                models: filteredModels
+              })
+            }
+          }
+        }
+        
+        return results
+      }
+      
+      try {
+        this.filteredCache = await processGroups()
+      } finally {
+        this.filtering = false
+      }
+    },
+    
+    // Add method to handle provider-related messages
+    handleProviderMessage(data) {
+      // Listen for all provider CRUD events and refresh model data
+      if (data.type === 'config') {
+        if (data.action === 'provider_save_complete' ||
+            data.action === 'provider_instance_delete_complete' ||
+            data.action === 'provider_update_complete' ||
+            data.action === 'provider_create_complete' ||
+            data.action === 'providers_updated') {
+          // Refresh model data when providers are created, updated, or deleted
+          this.refreshModelData()
+        }
+      }
     },
     
     selectModel(model, group) {
@@ -733,6 +1146,36 @@ export default {
         'OpenAI Compatible': 'mdi-api'
       }
       return iconMap[providerName] || 'mdi-cloud'
+    },
+    
+    getSubProviderIcon(providerName) {
+      const iconMap = {
+        'OpenAI': 'mdi-openid',
+        'Anthropic': 'mdi-robot-happy',
+        'Google': 'mdi-google',
+        'Meta': 'mdi-facebook',
+        'Mistral AI': 'mdi-weather-windy',
+        'Cohere': 'mdi-circle-multiple',
+        'DeepSeek': 'mdi-magnify-scan',
+        'Microsoft': 'mdi-microsoft',
+        'xAI': 'mdi-twitter',
+        'NVIDIA': 'mdi-chip',
+        'Perplexity': 'mdi-help-network',
+        'Inflection': 'mdi-lightbulb',
+        'Nous Research': 'mdi-school',
+        'Qwen': 'mdi-alphabetical-variant'
+      }
+      return iconMap[providerName] || 'mdi-circle-outline'
+    },
+    
+    getModelCount(group) {
+      if (group.has_subgroups && group.subgroups) {
+        // Sum models across all subgroups
+        return group.subgroups.reduce((total, subgroup) => {
+          return total + (subgroup.models ? subgroup.models.length : 0)
+        }, 0)
+      }
+      return group.models ? group.models.length : 0
     },
     
     hasCapabilities(model) {
@@ -1000,6 +1443,10 @@ export default {
         return dateString
       }
     }
+  },
+  created() {
+    // Register message handlers for websocket events
+    this.registerMessageHandler(this.handleProviderMessage);
   }
 }
 </script>
@@ -1014,5 +1461,31 @@ export default {
 .model-list-item:hover {
   background-color: rgba(0, 0, 0, 0.04);
   border-color: rgba(0, 0, 0, 0.26);
+}
+
+/* Spinning animation for refresh button */
+.mdi-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Highlight search results */
+::v-deep mark {
+  background-color: rgba(var(--v-theme-primary), 0.1);
+  color: rgb(var(--v-theme-primary));
+  font-weight: 500;
+  padding: 0;
+  border-radius: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--v-theme-primary), 0.3);
+  text-underline-offset: 2px;
 }
 </style>
