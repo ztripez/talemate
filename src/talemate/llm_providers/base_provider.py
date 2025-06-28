@@ -118,44 +118,6 @@ class BaseProvider(ABC):
                 params[key] = value
         
         return params
-    
-    async def acompletion(self, model_name: str, messages: List[Dict[str, Any]], **kwargs):
-        """Make an async completion call"""
-        params = self._build_litellm_params(model_name, messages=messages, **kwargs)
-        # Enable drop_params to handle unsupported parameters gracefully
-        params.setdefault("drop_params", True)
-        
-        # Log what we're sending for debugging
-        import structlog
-        log = structlog.get_logger("litellm.provider")
-        log.debug("LiteLLM params", 
-                  provider_class=self.__class__.__name__,
-                  model=params.get("model"), 
-                  api_base=params.get("api_base"),
-                  drop_params=params.get("drop_params"), 
-                  param_keys=list(params.keys()))
-        
-
-        try:
-            return await litellm.acompletion(**params)
-        except litellm.BadRequestError as e:
-            # If we get an unsupported parameter error, try to extract the parameter name and retry
-            error_msg = str(e)
-            if "Unsupported parameter" in error_msg and "is not supported with this model" in error_msg:
-                # Extract parameter name from error message
-                import re
-                match = re.search(r"Unsupported parameter: '(\w+)'", error_msg)
-                if match:
-                    bad_param = match.group(1)
-                    log.warning(f"Removing unsupported parameter '{bad_param}' and retrying", model=model_name)
-                    # Remove the parameter and retry
-                    if bad_param in params:
-                        del params[bad_param]
-                        return await litellm.acompletion(**params)
-            raise
-        except litellm.APIConnectionError as e:
-            log.error("API connection error", error=str(e), model=model_name, api_base=params.get("api_base"))
-            raise
 
     
     def get_available_models(self, settings: Dict[str, Any] = None) -> List[str]:

@@ -99,85 +99,53 @@ class KoboldCppClient(ClientBase):
         parts = urlparse(self.api_url)
         return f"{parts.scheme}://{parts.netloc}"
 
-    @property
-    def is_openai(self) -> bool:
-        """
-        kcpp has two apis
-
-        open-ai implementation at /v1
-        their own implementation at /api/v1
-        """
-        return "/api/v1" not in self.api_url
+    # KoboldCpp should always use native API, never OpenAI-compatible API
 
     @property
     def api_url_for_model(self) -> str:
-        if self.is_openai:
-            # join /model to url
-            return urljoin(self.api_url, "models")
-        else:
-            # join /models to url
-            return urljoin(self.api_url, "model")
+        # Always use native KoboldCpp API endpoint
+        return urljoin(self.api_url, "model")
 
     @property
     def api_url_for_generation(self) -> str:
-        if self.is_openai:
-            # join /v1/completions
-            return urljoin(self.api_url, "completions")
-        else:
-            # join /api/extra/generate/stream
-            return urljoin(self.api_url.replace("v1", "extra"), "generate/stream")
+        # Always use native KoboldCpp streaming API endpoint
+        return urljoin(self.api_url.replace("v1", "extra"), "generate/stream")
 
     @property
     def max_tokens_param_name(self):
-        if self.is_openai:
-            return "max_tokens"
-        else:
-            return "max_length"
+        # Always use native KoboldCpp parameter name
+        return "max_length"
 
     @property
     def supported_parameters(self):
-        if not self.is_openai:
-            # koboldcpp united api
-
-            return [
-                ParameterReroute(
-                    talemate_parameter="max_tokens", client_parameter="max_length"
-                ),
-                "max_context_length",
-                ParameterReroute(
-                    talemate_parameter="repetition_penalty", client_parameter="rep_pen"
-                ),
-                ParameterReroute(
-                    talemate_parameter="repetition_penalty_range",
-                    client_parameter="rep_pen_range",
-                ),
-                "top_p",
-                "top_k",
-                ParameterReroute(
-                    talemate_parameter="stopping_strings",
-                    client_parameter="stop_sequence",
-                ),
-
-                "xtc_threshold",
-                "xtc_probability",
-                "dry_multiplier",
-                "dry_base",
-                "dry_allowed_length",
-                "dry_sequence_breakers",
-                "smoothing_factor",
-                
-                "temperature",
-            ]
-
-        else:
-            # openai api
-
-            return [
-                "max_tokens",
-                "presence_penalty",
-                "top_p",
-                "temperature",
-            ]
+        # Always use native KoboldCpp parameters
+        return [
+            ParameterReroute(
+                talemate_parameter="max_tokens", client_parameter="max_length"
+            ),
+            "max_context_length",
+            ParameterReroute(
+                talemate_parameter="repetition_penalty", client_parameter="rep_pen"
+            ),
+            ParameterReroute(
+                talemate_parameter="repetition_penalty_range",
+                client_parameter="rep_pen_range",
+            ),
+            "top_p",
+            "top_k",
+            ParameterReroute(
+                talemate_parameter="stopping_strings",
+                client_parameter="stop_sequence",
+            ),
+            "xtc_threshold",
+            "xtc_probability",
+            "dry_multiplier",
+            "dry_base",
+            "dry_allowed_length",
+            "dry_sequence_breakers",
+            "smoothing_factor",
+            "temperature",
+        ]
 
     @property
     def supports_embeddings(self) -> bool:
@@ -185,22 +153,17 @@ class KoboldCppClient(ClientBase):
     
     @property
     def embeddings_url(self) -> str:
-        if self.is_openai:
-            return urljoin(self.api_url, "embeddings")
-        else:
-            return urljoin(self.api_url, "api/extra/embeddings")
+        # Always use native KoboldCpp embeddings endpoint
+        return urljoin(self.api_url, "api/extra/embeddings")
     
     @property
     def embeddings_function(self):
         return KoboldEmbeddingFunction(self.embeddings_url, self.embeddings_model_name)
     
-    def api_endpoint_specified(self, url: str) -> bool:
-        return "/v1" in self.api_url
-
     def ensure_api_endpoint_specified(self):
-        if not self.api_endpoint_specified(self.api_url):
-            # url doesn't specify the api endpoint
-            # use the koboldcpp united api
+        # Always force native KoboldCpp API endpoint
+        if "/api/v1" not in self.api_url:
+            # If URL doesn't already have the native API endpoint, add it
             self.api_url = urljoin(self.api_url.rstrip("/") + "/", "/api/v1/")
         if not self.api_url.endswith("/"):
             self.api_url += "/"
@@ -213,17 +176,7 @@ class KoboldCppClient(ClientBase):
     def set_client(self, **kwargs):
         self.api_key = kwargs.get("api_key", self.api_key)
         self.ensure_api_endpoint_specified()
-        
-        # Configure LiteLLM for KoboldCpp
-        if self.is_openai:
-            # Use OpenAI-compatible endpoint
-            litellm.api_base = self.api_url
-            if self.api_key:
-                litellm.api_key = self.api_key
-        else:
-            # For KoboldCpp native API, we'll continue using the custom implementation
-            # since LiteLLM doesn't support KoboldCpp's native streaming API
-            pass
+        # KoboldCpp always uses native API with custom LiteLLM handler
 
     async def get_embeddings_model_name(self):
         # if self._embeddings_model_name is set, return it
@@ -286,12 +239,8 @@ class KoboldCppClient(ClientBase):
             raise KeyError(f"Could not find model info at: {self.api_url_for_model}")
 
         response_data = response.json()
-        if self.is_openai:
-            # {"object": "list", "data": [{"id": "koboldcpp/dolphin-2.8-mistral-7b", "object": "model", "created": 1, "owned_by": "koboldcpp", "permission": [], "root": "koboldcpp"}]}
-            model_name = response_data.get("data")[0].get("id")
-        else:
-            # {"result": "koboldcpp/dolphin-2.8-mistral-7b"}
-            model_name = response_data.get("result")
+        # Native KoboldCpp API response format: {"result": "model-name"}
+        model_name = response_data.get("result")
 
         # split by "/" and take last
         if model_name:
@@ -333,12 +282,8 @@ class KoboldCppClient(ClientBase):
 
     async def abort_generation(self):
         """
-        Trigger the stop generation endpoint
+        Trigger the stop generation endpoint (native KoboldCpp API only)
         """
-        if self.is_openai:
-            # openai api endpoint doesn't support abort
-            return
-        
         parts = urlparse(self.api_url)
         url_abort = f"{parts.scheme}://{parts.netloc}/api/extra/abort"
         async with httpx.AsyncClient() as client:
@@ -349,12 +294,9 @@ class KoboldCppClient(ClientBase):
     
     async def generate(self, prompt: str, parameters: dict, kind: str):
         """
-        Generates text from the given prompt and parameters.
+        Generates text from the given prompt and parameters using native KoboldCpp API.
         """
-        if self.is_openai:
-            return await self._generate_openai(prompt, parameters, kind)
-        else:
-            return await self._generate_kcpp_native(prompt, parameters, kind)
+        return await self._generate_kcpp_native(prompt, parameters, kind)
     
     def _generate_kcpp_stream(self, prompt: str, parameters: dict, kind: str):
         """
@@ -395,7 +337,7 @@ class KoboldCppClient(ClientBase):
             
             # Prepare LiteLLM parameters for custom provider
             litellm_params = {
-                "model": "custom/koboldcpp",
+                "model": f"koboldcpp/{self.model_name}",
                 "messages": messages,
                 "stream": True,
                 "api_base": self.api_url_for_generation,
@@ -444,68 +386,6 @@ class KoboldCppClient(ClientBase):
             log.error("generate error", e=e)
             return ""
 
-    async def _generate_openai(self, prompt: str, parameters: dict, kind: str):
-        """
-        Generates text from the given prompt and parameters using LiteLLM.
-        """
-
-        self._returned_prompt_tokens = await self.tokencount(prompt.strip())
-
-        try:
-            # Convert to chat format for LiteLLM
-            messages = [{"role": "user", "content": prompt.strip()}]
-            
-            # Prepare LiteLLM parameters
-            litellm_params = {
-                "model": f"openai/{self.model_name}",  # Use OpenAI-compatible format
-                "messages": messages,
-                "stream": True,
-                **parameters,
-            }
-
-            # Set API base and key
-            litellm_params["api_base"] = self.api_url
-            if self.api_key:
-                litellm_params["api_key"] = self.api_key
-
-            stream = await acompletion(**litellm_params)
-
-            response_text = ""
-
-            # Iterate over streamed chunks
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta and getattr(delta, "content", None):
-                    content_piece = delta.content
-                    response_text += content_piece
-                    # Track token usage incrementally
-                    self.update_request_tokens(self.count_tokens(content_piece))
-
-            # Extract token usage if available
-            if hasattr(stream, 'usage') and stream.usage:
-                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
-                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
-            else:
-                self._returned_response_tokens = await self.tokencount(response_text)
-
-            return response_text
-        except AuthenticationError as e:
-            log.error("generate error - authentication", e=e)
-            return ""
-        except BadRequestError as e:
-            log.error("generate error - bad request", e=e)
-            return ""
-        except ServiceUnavailableError as e:
-            log.error("generate error - service unavailable", e=e)
-            return ""
-        except Timeout as e:
-            log.error("generate error - timeout", e=e)
-            return ""
-        except Exception as e:
-            log.error("generate error", e=e)
-            return ""
 
     def jiggle_randomness(self, prompt_config: dict, offset: float = 0.3) -> dict:
         """

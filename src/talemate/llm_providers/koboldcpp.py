@@ -1,5 +1,5 @@
 # koboldcpp_provider.py
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import litellm
 from .base_provider import BaseProvider, ProviderSetting
@@ -17,6 +17,9 @@ _KOBOLD_PARAMS = {
     "use_default_badwordsids",
 }
 
+_identifier_ = "koboldcpp"
+
+
 class KoboldCppProvider(BaseProvider):
     """KoboldCpp LiteLLM Provider"""
     
@@ -26,20 +29,11 @@ class KoboldCppProvider(BaseProvider):
     
     @classmethod
     def get_provider_identifier(cls) -> str:
-        return "koboldcpp"
+        return _identifier_
     
     @classmethod
     def get_settings_schema(cls) -> List[ProviderSetting]:
         return [
-            ProviderSetting(
-                key="api_key",
-                label="API Key",
-                type="password",
-                required=False,
-                default="dummy",
-                description="KoboldCpp doesn't require an API key, but LiteLLM needs one",
-                hidden=True  # Hide this field since it's not actually used
-            ),
             ProviderSetting(
                 key="api_base",
                 label="API Base URL",
@@ -47,7 +41,17 @@ class KoboldCppProvider(BaseProvider):
                 required=True,
                 default="http://localhost:5001",
                 description="KoboldCpp API base URL"
+            ),
+            ProviderSetting(
+                key="api_key",
+                label="API Key",
+                type="password",
+                required=False,
+                default="dummy",
+                description="KoboldCpp doesn't require an API key, but LiteLLM needs one",
+                hidden=True 
             )
+
         ]
     
     def get_available_models(self, settings: Dict[str, Any] = None) -> List[str]:
@@ -60,79 +64,38 @@ class KoboldCppProvider(BaseProvider):
             api_base = settings["api_base"].rstrip("/")
             r = requests.get(f"{api_base}/api/v1/model", timeout=5)
             name = r.json().get("result", "unknown")
-            return [name]  # Return just the model name without provider prefix
+            return [name]
         except Exception:
             return ["unknown"]
     
     def get_model_parameters(self, model_name: str) -> List[str]:
         """Get supported parameters for KoboldCpp models"""
-        # Return all KoboldCpp-specific parameters plus standard ones
         kobold_params = list(_KOBOLD_PARAMS)
         standard_params = ["temperature", "max_tokens", "top_p"]
-        
-        # Combine and return unique parameters
         all_params = set(kobold_params + standard_params)
         return sorted(list(all_params))
     
     def _build_litellm_params(self, model_name: str, **kwargs) -> Dict[str, Any]:
         """Build parameters for KoboldCpp litellm call"""
-        # For KoboldCpp, we need to pass through all the custom parameters
-        # Get the configured api_base
         api_base = self.config.settings.get("api_base", "http://localhost:5001")
-        
-        # Build the model name with provider prefix
-        full_model_name = f"koboldcpp/{model_name}"
-        
-        # Filter kwargs to include KoboldCpp parameters
+        full_model_name = f"{_identifier_}/{model_name}"
         supported_params = self.get_model_parameters(model_name)
-        
-        # Build params with all supported parameters
         params = {
             "model": full_model_name,
             "api_base": api_base,
-            "custom_llm_provider": "koboldcpp",
+            "custom_llm_provider": _identifier_,
         }
-        
-        # Add all parameters that KoboldCpp supports
         for key, value in kwargs.items():
             if key in supported_params or key in ["messages", "stream"]:
                 params[key] = value
-        
-        # Ensure we have the dummy API key
         params["api_key"] = self.config.settings.get("api_key", "dummy")
-        
         return params
-    
-    async def acompletion(self, model_name: str, messages: List[Dict[str, Any]], **kwargs):
-        """Override acompletion to handle streaming properly for KoboldCpp"""
-        # Check if streaming is requested
-        if kwargs.get("stream", False):
-            # For streaming, we need to return an async generator, not a ModelResponse
-            # Build parameters and call litellm directly with streaming
-            params = self._build_litellm_params(model_name, messages=messages, **kwargs)
-            params["stream"] = True
-            
-            try:
-                # Return the streaming response directly from litellm
-                return await litellm.acompletion(**params)
-            except Exception as e:
-                # Fall back to non-streaming
-                kwargs_copy = kwargs.copy()
-                kwargs_copy.pop("stream", None)
-                return await super().acompletion(model_name, messages, **kwargs_copy)
-        else:
-            # For non-streaming, use the parent implementation
-            return await super().acompletion(model_name, messages, **kwargs)
-
-
 
 
 class KoboldCppLiteLLM(CustomLLM):
-    def __init__(self, base_url: str):
+    def __init__(self):
         super().__init__()
-        self.base_url = base_url.rstrip("/")
 
-    # ---------- helpers ----------
     def _build_payload(self, messages, max_tokens, opts):
         prompt = "".join(m["content"] for m in messages if m["role"] != "system")
         p = {"prompt": prompt, "max_length": max_tokens or 256}
@@ -149,11 +112,14 @@ class KoboldCppLiteLLM(CustomLLM):
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    # ---------- sync ----------
     def completion(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs):
         optional_params = optional_params or {}
-        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
-        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        # Get api_base from kwargs - LiteLLM passes it dynamically
+        api_base = kwargs.get("api_base")
+        if not api_base:
+            raise Exception("KoboldCpp completion requires api_base to be set in kwargs")
+        api_base = api_base.rstrip("/")
+        
         payload = self._build_payload(messages, max_tokens, optional_params)
         r = requests.post(f"{api_base}/api/v1/generate", json=payload,
                           timeout=optional_params.get("timeout", 60))
@@ -172,8 +138,12 @@ class KoboldCppLiteLLM(CustomLLM):
 
     def streaming(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs) -> Iterator[GenericStreamingChunk]:
         optional_params = optional_params or {}
-        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
-        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        # Get api_base from kwargs - LiteLLM passes it dynamically
+        api_base = kwargs.get("api_base")
+        if not api_base:
+            raise Exception("KoboldCpp streaming requires api_base to be set in kwargs")
+        api_base = api_base.rstrip("/")
+        
         payload = self._build_payload(messages, max_tokens, optional_params)
         s = requests.post(
             f"{api_base}/api/extra/generate/stream",
@@ -207,11 +177,14 @@ class KoboldCppLiteLLM(CustomLLM):
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
 
-    # ---------- async ----------
     async def acompletion(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs):
         optional_params = optional_params or {}
-        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
-        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        # Get api_base from kwargs - LiteLLM passes it dynamically
+        api_base = kwargs.get("api_base")
+        if not api_base:
+            raise Exception("KoboldCpp acompletion requires api_base to be set in kwargs")
+        api_base = api_base.rstrip("/")
+        
         payload = self._build_payload(messages, max_tokens, optional_params)
         async with httpx.AsyncClient(timeout=optional_params.get("timeout", 60)) as client:
             r = await client.post(f"{api_base}/api/v1/generate", json=payload)
@@ -230,19 +203,20 @@ class KoboldCppLiteLLM(CustomLLM):
 
     async def astreaming(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
         optional_params = optional_params or {}
-        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
-        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        # Get api_base from kwargs - LiteLLM passes it dynamically
+        api_base = kwargs.get("api_base")
+        if not api_base:
+            raise Exception("KoboldCpp astreaming requires api_base to be set in kwargs")
+        api_base = api_base.rstrip("/")
         
         payload = self._build_payload(messages, max_tokens, optional_params)
         
         async with httpx.AsyncClient(timeout=None) as client:
-            # POST method for streaming
             async with client.stream(
                 "POST",
                 f"{api_base}/api/extra/generate/stream",
                 json=payload,
             ) as resp:
-                # Check if streaming endpoint exists
                 if resp.status_code != 200:
                     raise Exception(f"KoboldCpp streaming endpoint not available (status: {resp.status_code})")
                 
@@ -271,38 +245,38 @@ class KoboldCppLiteLLM(CustomLLM):
                     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                 }
 
-    # ------------------------------------------------------------------
-    # Model discovery
-    # ------------------------------------------------------------------
-    def list_models(self) -> list[str]:
+    def list_models(self, api_base: Optional[str] = None) -> list[str]:
         """
         KoboldCpp runs exactly one model at a time; `/api/v1/model`
         returns its short name.
         """
+        if not api_base:
+            raise Exception("KoboldCpp list_models requires api_base parameter")
         try:
-            r = requests.get(f"{self.base_url}/api/v1/model", timeout=5)
+            r = requests.get(f"{api_base.rstrip('/')}/api/v1/model", timeout=5)
             name = r.json().get("result") or r.text.strip()
-            return [f"koboldcpp/{name}"]
+            return [f"{_identifier_}/{name}"]
         except Exception:
-            # If the endpoint is disabled just fall back to a synthetic id
-            return ["koboldcpp/unknown"]
-
-    def get_model_info(self, model: str) -> ModelInfoBase:          # LiteLLM hook
+            raise
+    
+    def get_model_info(self, model: str, api_base: Optional[str] = None) -> ModelInfoBase:
         """
-        Populate LiteLLM’s `ModelInfoBase` from the three public
+        Populate LiteLLM's `ModelInfoBase` from the three public
         endpoints KoboldCpp exposes.
         """
-        # 1. canonical name
-        info = requests.get(f"{self.base_url}/api/v1/model").json()        # { result: "Llama-3-8B-Q6_K" }
+        if not api_base:
+            raise Exception("KoboldCpp get_model_info requires api_base parameter")
+        
+        api_base = api_base.rstrip("/")
+        info = requests.get(f"{api_base}/api/v1/model").json()
         real_name = info.get("result", "unknown")
 
-        # 2 + 3. context & generation limits
-        ctx = requests.get(f"{self.base_url}/api/v1/config/max_context_length").json().get("value", None)
-        gen = requests.get(f"{self.base_url}/api/v1/config/max_length").json().get("value", None)
+        ctx = requests.get(f"{api_base}/api/v1/config/max_context_length").json().get("value", None)
+        gen = requests.get(f"{api_base}/api/v1/config/max_length").json().get("value", None)
 
         return ModelInfoBase(
-            key=f"koboldcpp/{real_name}",
-            litellm_provider="koboldcpp",
+            key=f"{_identifier_}/{real_name}",
+            litellm_provider=_identifier_,
             mode="chat",
             input_cost_per_token=0.0,
             output_cost_per_token=0.0,
