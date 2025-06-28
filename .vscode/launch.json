@@ -1,0 +1,97 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Backend: Run Server",
+            "type": "python",
+            "request": "launch",
+            "module": "src.talemate.server.run",
+            "args": [
+                "runserver",
+                "--host", "0.0.0.0",
+                "--port", "5050",
+                "--backend-only"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Backend: Debug Server",
+            "type": "python",
+            "request": "launch",
+            "module": "src.talemate.server.run",
+            "args": [
+                "runserver",
+                "--host", "localhost",
+                "--port", "6000",
+                "--debug"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Frontend: Serve",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": [
+                "run",
+                "serve"
+            ],
+            "cwd": "${workspaceFolder}/talemate_frontend",
+            "console": "integratedTerminal",
+            "env": {
+                "NODE_ENV": "development",
+                "VUE_APP_TALEMATE_BACKEND_WEBSOCKET_URL":"ws://192.168.61.70:5050"
+            }
+        },
+        {
+            "name": "Frontend: Build",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": [
+                "run",
+                "build"
+            ],
+            "cwd": "${workspaceFolder}/talemate_frontend",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Python: Run Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "-v",
+                "tests/"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Full Stack: Backend + Frontend",
+            "configurations": ["Backend: Run Server", "Frontend: Serve"],
+            "stopAll": true
+        }
+    ]
+}

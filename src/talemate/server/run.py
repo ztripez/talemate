@@ -1,5 +1,44 @@
 print("Talemate starting.")
 print("Startup may take a moment to download some dependencies, please be patient ...")
+from talemate.llm_providers.koboldcpp import KoboldCppLiteLLM
+import litellm
+
+kobold_handler = KoboldCppLiteLLM(base_url="http://localhost:5001")
+litellm.custom_provider_map.append(
+    {"provider": "koboldcpp", "custom_handler": kobold_handler}
+)
+
+# ------------------------------------------------------------------
+# 2) extend the enum so utils.get_valid_models() accepts it
+# ------------------------------------------------------------------
+from litellm.types.utils import LlmProviders               # the original enum
+from enum import Enum
+
+if "koboldcpp" not in LlmProviders.__members__:            # idempotent
+    members = {k: v.value for k, v in LlmProviders.__members__.items()}
+    members["koboldcpp"] = "koboldcpp"
+    Patched = Enum("LlmProviders", members)                # rebuild enum
+
+    import litellm.types.utils as _types                   # patch *both* modules
+    import litellm.utils as _utils
+
+    _types.LlmProviders = Patched
+    _utils.LlmProviders = Patched
+
+# ------------------------------------------------------------------
+# 3) now refresh LiteLLM’s internal caches (adds to provider_list, etc.)
+# ------------------------------------------------------------------
+litellm.utils.custom_llm_setup()
+
+# Add koboldcpp to models_by_provider so get_valid_models works
+if not hasattr(litellm, 'models_by_provider'):
+    litellm.models_by_provider = {}
+# This will be dynamically discovered when a provider instance is configured
+litellm.models_by_provider["koboldcpp"] = []
+
+# ------------------------------------------------------------------
+# 4) sanity-check – this line used to blow up, now it’s silent
+# ------------------------------------------------------------------
 import os
 
 import logging
@@ -16,6 +55,7 @@ import re
 import talemate.config
 from talemate.server.api import websocket_endpoint
 from talemate.version import VERSION
+
 
 TALEMATE_DEBUG = os.environ.get("TALEMATE_DEBUG", "0")
 log_level = logging.DEBUG if TALEMATE_DEBUG == "1" else logging.INFO

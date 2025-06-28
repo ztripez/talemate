@@ -37,7 +37,8 @@ def _register(name: str):
     """
 
     if name in handlers:
-        raise ValueError(f"Signal {name} already registered")
+        return
+        #raise ValueError(f"Signal {name} already registered")
 
     handlers[name] = AsyncSignal(name)
     return handlers[name]

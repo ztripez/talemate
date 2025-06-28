@@ -286,26 +286,20 @@ class ConfigPlugin:
         current_config = load_config()  # This returns a dict by default
         saved_settings = current_config.get("litellm_providers", {})
         
-        # Add saved settings to each provider
+        # Add saved settings to each provider - all providers are multi-instance
         for provider in providers:
             provider_id = provider["identifier"]
-            if provider["multi_instance"]:
-                # For multi-instance providers, load all instances
-                provider["instances"] = []
-                for key, settings in saved_settings.items():
-                    if key.startswith(f"{provider_id}_"):
-                        instance_id = key
-                        provider["instances"].append({
-                            "id": instance_id,
-                            "name": settings.get("instance_name", instance_id),
-                            "settings": settings
-                        })
-            else:
-                # For single-instance providers, load direct settings
-                if provider_id in saved_settings:
-                    provider["saved_settings"] = saved_settings[provider_id]
-                else:
-                    provider["saved_settings"] = {}
+            provider["instances"] = []
+            
+            # Load all instances for this provider
+            for instance_uid, settings in saved_settings.items():
+                # Check if this instance belongs to this provider
+                if settings.get("provider_id") == provider_id:
+                    provider["instances"].append({
+                        "id": instance_uid,
+                        "name": settings.get("instance_name", instance_uid),
+                        "settings": settings
+                    })
         
         self.websocket_handler.queue_put({
             "type": "config",
@@ -314,11 +308,12 @@ class ConfigPlugin:
         })
     
     async def handle_save_provider_settings(self, data):
-        """Save LiteLLM provider settings"""
+        """Save LiteLLM provider settings - all providers are treated as multi-instance"""
         provider_id = data.get("provider_id")
+        instance_id = data.get("instance_id")
         settings = data.get("settings", {})
         
-        log.info("Saving provider settings", provider_id=provider_id, settings=settings)
+        log.info("Saving provider settings", provider_id=provider_id, instance_id=instance_id, settings=settings)
         
         if not provider_id:
             self.websocket_handler.queue_put({
@@ -336,8 +331,16 @@ class ConfigPlugin:
             if "litellm_providers" not in current_config:
                 current_config["litellm_providers"] = {}
             
-            # Save provider settings
-            current_config["litellm_providers"][provider_id] = settings
+            # Generate new UUID if not provided
+            if not instance_id:
+                import uuid
+                instance_id = str(uuid.uuid4())
+            
+            # Add provider_id to settings
+            settings["provider_id"] = provider_id
+            
+            # Save instance settings with the UID as key
+            current_config["litellm_providers"][instance_id] = settings
             
             # Save config to file
             save_config(current_config)
@@ -351,6 +354,7 @@ class ConfigPlugin:
                 "action": "provider_save_complete", 
                 "data": {
                     "provider_id": provider_id,
+                    "instance_id": instance_id,
                     "message": "Provider settings saved successfully"
                 },
             })
@@ -371,76 +375,22 @@ class ConfigPlugin:
             })
     
     async def handle_save_provider_instance(self, data):
-        """Save multi-instance provider settings"""
-        provider_id = data.get("provider_id")
-        instance_id = data.get("instance_id")
-        settings = data.get("settings", {})
-        
-        log.info("Saving provider instance", provider_id=provider_id, instance_id=instance_id, settings=settings)
-        
-        if not provider_id or not instance_id:
-            self.websocket_handler.queue_put({
-                "type": "config",
-                "action": "provider_instance_save_error",
-                "data": {"message": "Provider ID and Instance ID are required"},
-            })
-            return
-        
-        try:
-            # Load current config
-            current_config = load_config()
+        """Save provider instance settings - delegates to handle_save_provider_settings"""
+        # All providers are multi-instance, so delegate to the unified handler
+        await self.handle_save_provider_settings(data)
             
-            # Initialize litellm_providers section if it doesn't exist
-            if "litellm_providers" not in current_config:
-                current_config["litellm_providers"] = {}
-            
-            # Save instance settings with the instance ID as key
-            current_config["litellm_providers"][instance_id] = settings
-            
-            # Save config to file
-            save_config(current_config)
-            
-            # Update websocket handler config
-            self.websocket_handler.config = current_config
-            
-            # Send success response
-            self.websocket_handler.queue_put({
-                "type": "config",
-                "action": "provider_instance_save_complete",
-                "data": {
-                    "provider_id": provider_id,
-                    "instance_id": instance_id,
-                    "message": "Provider instance saved successfully"
-                },
-            })
-            
-            # Send updated app config
-            self.websocket_handler.queue_put({
-                "type": "app_config",
-                "data": current_config,
-                "version": VERSION
-            })
-            
-        except Exception as e:
-            log.error("Failed to save provider instance", error=str(e))
-            self.websocket_handler.queue_put({
-                "type": "config",
-                "action": "provider_instance_save_error",
-                "data": {"message": f"Failed to save instance: {str(e)}"},
-            })
     
     async def handle_delete_provider_instance(self, data):
-        """Delete multi-instance provider settings"""
-        provider_id = data.get("provider_id")
+        """Delete provider instance settings"""
         instance_id = data.get("instance_id")
         
-        log.info("Deleting provider instance", provider_id=provider_id, instance_id=instance_id)
+        log.info("Deleting provider instance", instance_id=instance_id)
         
-        if not provider_id or not instance_id:
+        if not instance_id:
             self.websocket_handler.queue_put({
                 "type": "config",
                 "action": "provider_instance_delete_error",
-                "data": {"message": "Provider ID and Instance ID are required"},
+                "data": {"message": "Instance ID is required"},
             })
             return
         
@@ -463,7 +413,6 @@ class ConfigPlugin:
                     "type": "config",
                     "action": "provider_instance_delete_complete",
                     "data": {
-                        "provider_id": provider_id,
                         "instance_id": instance_id,
                         "message": "Provider instance deleted successfully"
                     },
@@ -503,22 +452,24 @@ class ConfigPlugin:
             
             # Process each configured provider instance
             for instance_id, settings in saved_providers.items():
-                # Get the base provider ID to look up the provider class
-                if "_" in instance_id:
-                    base_provider_id = instance_id.split("_")[0]
-                else:
-                    base_provider_id = instance_id
+                # Get the provider ID from settings
+                provider_id = settings.get("provider_id")
+                
+                if not provider_id:
+                    log.warning("Skipping instance without provider_id", instance_id=instance_id)
+                    continue
                 
                 # Get the human-readable provider name from the registry
-                provider_class = provider_registry._providers.get(base_provider_id)
+                provider_class = provider_registry._providers.get(provider_id)
                 if provider_class:
                     provider_name = provider_class.get_provider_name()
+                    # Create provider instance to get models with capabilities
+                    provider_instance = provider_class()
+                    models = provider_instance.get_models_with_capabilities(settings)
                 else:
                     # Fallback to instance name if provider not found
                     provider_name = settings.get("instance_name", instance_id)
-                
-                # Use provider registry to get enhanced models
-                models = provider_registry.get_models_with_capabilities(instance_id, settings)
+                    models = []
                 
                 if models:
                     # Sort models by display name within each provider
@@ -557,8 +508,13 @@ class ConfigPlugin:
             saved_providers = current_config.get("litellm_providers", {})
             provider_settings = saved_providers.get(provider_id, {})
             
-            # Get base provider ID (handle multi-instance providers)
-            base_provider_id = provider_id.split("_")[0] if "_" in provider_id else provider_id
+            # Get provider settings to find the actual provider ID
+            provider_settings = saved_providers.get(provider_id, {})
+            base_provider_id = provider_settings.get("provider_id")
+            
+            if not base_provider_id:
+                log.warning("Provider settings missing provider_id", instance_id=provider_id)
+                return parameters
             
             # Get provider class from registry
             provider_class = provider_registry._providers.get(base_provider_id)

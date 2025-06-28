@@ -1,216 +1,352 @@
+# koboldcpp_provider.py
 from typing import List, Dict, Any
-import httpx
-from .base_provider import BaseProvider, ProviderSetting
 
+import litellm
+from .base_provider import BaseProvider, ProviderSetting
+import json, time, requests, httpx, itertools
+from typing import Iterator, AsyncIterator
+from litellm.llms.custom_llm import CustomLLM
+from litellm.types.utils import ModelInfoBase,ModelResponse, GenericStreamingChunk
+
+_KOBOLD_PARAMS = {
+    "rep_pen", "rep_pen_range", "typical_p", "tfs_z", "top_a", "top_k",
+    "mirostat", "mirostat_tau", "mirostat_eta", "min_p", "xtc_threshold",
+    "xtc_probability", "dynatemp_range", "dynatemp_exponent",
+    "banned_tokens", "sampler_priority", "sampler_order", "sampler_seed",
+    "presence_penalty", "frequency_penalty", "logit_bias",
+    "use_default_badwordsids",
+}
 
 class KoboldCppProvider(BaseProvider):
-    """KoboldCpp LiteLLM Provider - Supports native KoboldCpp API"""
-
+    """KoboldCpp LiteLLM Provider"""
+    
     @classmethod
     def get_provider_name(cls) -> str:
         return "KoboldCpp"
-
-    @classmethod
-    def get_provider_identifier(cls) -> str:
-        return "koboldcpp"  # Unique identifier for KoboldCpp
     
     @classmethod
-    def is_multi_instance(cls) -> bool:
-        """KoboldCpp supports multiple instances (different servers)"""
-        return True
+    def get_provider_identifier(cls) -> str:
+        return "koboldcpp"
     
     @classmethod
     def get_settings_schema(cls) -> List[ProviderSetting]:
         return [
             ProviderSetting(
+                key="api_key",
+                label="API Key",
+                type="password",
+                required=False,
+                default="dummy",
+                description="KoboldCpp doesn't require an API key, but LiteLLM needs one",
+                hidden=True  # Hide this field since it's not actually used
+            ),
+            ProviderSetting(
                 key="api_base",
                 label="API Base URL",
                 type="text",
                 required=True,
-                default="http://127.0.0.1:5001",
-                description="KoboldCpp base URL (e.g., http://localhost:5001)",
-            ),
-        ]
-    
-    def format_model_name(self, model_name: str, settings: Dict[str, Any] = None) -> str:
-        """Format model name for LiteLLM - KoboldCpp uses custom/koboldcpp"""
-        # KoboldCpp doesn't use model-specific names with litellm
-        # It always uses the generic custom/koboldcpp identifier
-        return "custom/koboldcpp"
-    
-    def _build_litellm_params(self, model_name: str, **kwargs) -> Dict[str, Any]:
-        """Build parameters for litellm call - match the working client implementation"""
-        # Get the base URL
-        base_url = self.config.settings.get("api_base", "http://127.0.0.1:5001")
-        
-        # Construct the generation endpoint - KoboldCpp native API uses /api/extra/generate
-        api_url = f"{base_url.rstrip('/')}/api/extra/generate"
-        
-        # Build params exactly like the working client
-        params = {
-            "model": "custom/koboldcpp",
-            "api_base": api_url,
-            **kwargs  # Pass all parameters directly
-        }
-        
-        # Add messages if provided
-        if 'messages' in kwargs:
-            params['messages'] = kwargs['messages']
-        
-        # Add API key if configured
-        api_key = self.config.settings.get("api_key")
-        if api_key:
-            params["api_key"] = api_key
-        
-        return params
-
-    async def acompletion(self, model_name: str, messages: List[Dict[str, Any]], **kwargs):
-        """Make a completion call to KoboldCpp API"""
-        import httpx
-        import json
-        import time
-        
-        # Get the base URL
-        base_url = self.config.settings.get("api_base", "http://127.0.0.1:5001")
-        
-        # Convert messages to prompt format for KoboldCpp
-        prompt = ""
-        for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            if role == "system":
-                prompt += f"{content}\n\n"
-            elif role == "user":
-                prompt += f"User: {content}\n"
-            elif role == "assistant":
-                prompt += f"Assistant: {content}\n"
-        
-        # Add "Assistant: " to prompt the model to respond
-        if messages and messages[-1].get("role") == "user":
-            prompt += "Assistant: "
-        
-        # Build parameters for KoboldCpp unified API
-        params = {
-            "prompt": prompt.strip(),
-        }
-        
-        # Map parameters to KoboldCpp API format
-        if "max_tokens" in kwargs:
-            params["max_length"] = kwargs["max_tokens"]
-        if "temperature" in kwargs:
-            params["temperature"] = kwargs["temperature"]
-        if "top_p" in kwargs:
-            params["top_p"] = kwargs["top_p"]
-        if "top_k" in kwargs:
-            params["top_k"] = kwargs["top_k"]
-        if "rep_pen" in kwargs:
-            params["rep_pen"] = kwargs["rep_pen"]
-        if "rep_pen_range" in kwargs:
-            params["rep_pen_range"] = kwargs["rep_pen_range"]
-        if "stop" in kwargs and kwargs["stop"]:
-            params["stop_sequence"] = kwargs["stop"]
-            
-        # Add other KoboldCpp-specific parameters
-        kobold_params = ["typical_p", "tfs_z", "top_a", "min_p", "mirostat", "mirostat_tau", 
-                        "mirostat_eta", "dynatemp_range", "dynatemp_exponent", "xtc_threshold",
-                        "xtc_probability", "sampler_order", "sampler_seed", "ban_eos_token",
-                        "dry_multiplier", "dry_base", "dry_allowed_length", "dry_sequence_breakers",
-                        "smoothing_factor", "use_default_badwordsids"]
-        
-        for key in kobold_params:
-            if key in kwargs and kwargs[key] is not None and kwargs[key] != "":
-                params[key] = kwargs[key]
-        
-        # Make the request
-        headers = {"Content-Type": "application/json"}
-        if self.config.settings.get("api_key"):
-            headers["Authorization"] = f"Bearer {self.config.settings.get('api_key')}"
-        
-        api_url = f"{base_url.rstrip('/')}/api/v1/generate"
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                api_url,
-                json=params,
-                headers=headers,
-                timeout=300.0  # 5 minute timeout for generation
+                default="http://localhost:5001",
+                description="KoboldCpp API base URL"
             )
-            response.raise_for_status()
-            
-            # Parse response
-            result = response.json()
-            generated_text = result.get("results", [{}])[0].get("text", "")
-        
-        # Build a response object that matches litellm's format
-        from litellm import ModelResponse, Choices, Message
-        return ModelResponse(
-            id=f"koboldcpp-{int(time.time())}",
-            choices=[Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(
-                    content=generated_text,
-                    role="assistant"
-                )
-            )],
-            created=int(time.time()),
-            model="custom/koboldcpp",
-            object="chat.completion"
-        )
-    
-    def get_model_parameters(self, model_name: str) -> List[str]:
-        """Return KoboldCpp-specific parameters that can be used"""
-        return [
-            # Standard parameters
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "stop",
-            "stream",
-            # KoboldCpp-specific parameters
-            "rep_pen",
-            "rep_pen_range",
-            "typical_p",
-            "tfs_z",
-            "top_a",
-            "top_k",
-            "mirostat",
-            "mirostat_tau",
-            "mirostat_eta",
-            "min_p",
-            "xtc_threshold",
-            "xtc_probability",
-            "dynatemp_range",
-            "dynatemp_exponent",
-            "banned_tokens",
-            "sampler_priority",
-            "sampler_order",
-            "sampler_seed",
-            "presence_penalty",
-            "frequency_penalty",
-            "logit_bias",
-            "use_default_badwordsids",
         ]
     
     def get_available_models(self, settings: Dict[str, Any] = None) -> List[str]:
-        """Get available models from KoboldCpp API"""
-        import requests
-        
-        if not settings:
-            return ["koboldcpp-model"]
-            
-        base_url = settings.get("api_base", "http://127.0.0.1:5001")
+        """Get the currently loaded model from KoboldCpp"""
+        if not settings or not settings.get("api_base"):
+            return ["unknown"]
         
         try:
-            # KoboldCpp has /api/v1/model endpoint to get current model info
-            response = requests.get(f"{base_url}/api/v1/model", timeout=5)
-            if response.status_code == 200:
-                model_info = response.json()
-                # The result contains the model name
-                model_name = model_info.get("result", "koboldcpp-model")
-                return [model_name]
-        except:
-            pass
+            import requests
+            api_base = settings["api_base"].rstrip("/")
+            r = requests.get(f"{api_base}/api/v1/model", timeout=5)
+            name = r.json().get("result", "unknown")
+            return [name]  # Return just the model name without provider prefix
+        except Exception:
+            return ["unknown"]
+    
+    def get_model_parameters(self, model_name: str) -> List[str]:
+        """Get supported parameters for KoboldCpp models"""
+        # Return all KoboldCpp-specific parameters plus standard ones
+        kobold_params = list(_KOBOLD_PARAMS)
+        standard_params = ["temperature", "max_tokens", "top_p"]
+        
+        # Combine and return unique parameters
+        all_params = set(kobold_params + standard_params)
+        return sorted(list(all_params))
+    
+    def _build_litellm_params(self, model_name: str, **kwargs) -> Dict[str, Any]:
+        """Build parameters for KoboldCpp litellm call"""
+        # For KoboldCpp, we need to pass through all the custom parameters
+        # Get the configured api_base
+        api_base = self.config.settings.get("api_base", "http://localhost:5001")
+        
+        # Build the model name with provider prefix
+        full_model_name = f"koboldcpp/{model_name}"
+        
+        # Filter kwargs to include KoboldCpp parameters
+        supported_params = self.get_model_parameters(model_name)
+        
+        # Build params with all supported parameters
+        params = {
+            "model": full_model_name,
+            "api_base": api_base,
+            "custom_llm_provider": "koboldcpp",
+        }
+        
+        # Add all parameters that KoboldCpp supports
+        for key, value in kwargs.items():
+            if key in supported_params or key in ["messages"]:
+                params[key] = value
+        
+        # Ensure we have the dummy API key
+        params["api_key"] = self.config.settings.get("api_key", "dummy")
+        
+        return params
+    
+    async def acompletion(self, model_name: str, messages: List[Dict[str, Any]], **kwargs):
+        """Override acompletion to handle streaming properly for KoboldCpp"""
+        # Check if streaming is requested
+        if kwargs.get("stream", False):
+            # For streaming, we need to return an async generator, not a ModelResponse
+            # Build parameters and call litellm directly with streaming
+            params = self._build_litellm_params(model_name, messages=messages, **kwargs)
+            params["stream"] = True
             
-        # Fallback to generic name if API call fails
-        return ["koboldcpp-model"]
+            # Log streaming attempt
+            import structlog
+            log = structlog.get_logger("koboldcpp.provider")
+            log.info("Attempting streaming completion", model=model_name, api_base=params.get("api_base"))
+            
+            try:
+                # Return the streaming response directly from litellm
+                return await litellm.acompletion(**params)
+            except Exception as e:
+                log.warning(f"Streaming failed, falling back to non-streaming: {str(e)}")
+                # Fall back to non-streaming
+                kwargs_copy = kwargs.copy()
+                kwargs_copy.pop("stream", None)
+                return await super().acompletion(model_name, messages, **kwargs_copy)
+        else:
+            # For non-streaming, use the parent implementation
+            return await super().acompletion(model_name, messages, **kwargs)
+
+
+
+
+class KoboldCppLiteLLM(CustomLLM):
+    def __init__(self, base_url: str):
+        super().__init__()
+        self.base_url = base_url.rstrip("/")
+
+    # ---------- helpers ----------
+    def _build_payload(self, messages, max_tokens, opts):
+        prompt = "".join(m["content"] for m in messages if m["role"] != "system")
+        p = {"prompt": prompt, "max_length": max_tokens or 256}
+        for k, v in opts.items():
+            if k in _KOBOLD_PARAMS or k in ("temperature", "top_p"):
+                p[k] = v
+        return p
+
+    @staticmethod
+    def _mk_usage(prompt_tokens: int, completion_tokens: int):
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
+    # ---------- sync ----------
+    def completion(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs):
+        optional_params = optional_params or {}
+        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
+        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        payload = self._build_payload(messages, max_tokens, optional_params)
+        r = requests.post(f"{api_base}/api/v1/generate", json=payload,
+                          timeout=optional_params.get("timeout", 60))
+        d = r.json()
+        txt = d["results"][0]["text"]
+        return ModelResponse(
+            id=f"kcpp-{int(time.time())}",
+            object="chat.completion",
+            created=int(time.time()),
+            model=model,
+            choices=[{"index": 0, "finish_reason": "stop",
+                      "message": {"role": "assistant", "content": txt}}],
+            usage=self._mk_usage(d.get("prompt_tokens", 0),
+                                 d.get("tokens_generated", len(txt.split())))
+        )
+
+    def streaming(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs) -> Iterator[GenericStreamingChunk]:
+        optional_params = optional_params or {}
+        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
+        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        payload = self._build_payload(messages, max_tokens, optional_params)
+        s = requests.get(
+            f"{api_base}/api/extra/generate/stream",
+            params={"data": json.dumps(payload)},
+            stream=True,
+            timeout=optional_params.get("timeout", None),
+        )  # SSE endpoint
+        buf, idx = "", 0
+        for line in s.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data:"):
+                continue
+            tok = json.loads(line[5:].strip())  # {"token": "x", ...}
+            if tok.get("token") is None:
+                continue
+            buf += tok["token"]
+            yield {           # GenericStreamingChunk spec :contentReference[oaicite:1]{index=1}
+                "index": idx,
+                "text": tok["token"],
+                "finish_reason": None,
+                "is_finished": False,
+                "tool_use": None,
+                "usage": {"prompt_tokens": 0, "completion_tokens": 1, "total_tokens": 1},
+            }
+            idx += 1
+        yield {
+            "index": idx,
+            "text": "",
+            "finish_reason": "stop",
+            "is_finished": True,
+            "tool_use": None,
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+    # ---------- async ----------
+    async def acompletion(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs):
+        optional_params = optional_params or {}
+        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
+        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        payload = self._build_payload(messages, max_tokens, optional_params)
+        async with httpx.AsyncClient(timeout=optional_params.get("timeout", 60)) as client:
+            r = await client.post(f"{api_base}/api/v1/generate", json=payload)
+            d = r.json()
+        txt = d["results"][0]["text"]
+        return ModelResponse(
+            id=f"kcpp-{int(time.time())}",
+            object="chat.completion",
+            created=int(time.time()),
+            model=model,
+            choices=[{"index": 0, "finish_reason": "stop",
+                      "message": {"role": "assistant", "content": txt}}],
+            usage=self._mk_usage(d.get("prompt_tokens", 0),
+                                 d.get("tokens_generated", len(txt.split())))
+        )
+
+    async def astreaming(self, *, model, messages, max_tokens=None, optional_params=None, **kwargs) -> AsyncIterator[GenericStreamingChunk]:
+        optional_params = optional_params or {}
+        # Use api_base from kwargs if provided, otherwise fall back to self.base_url
+        api_base = kwargs.get("api_base", self.base_url).rstrip("/")
+        
+        # Debug logging
+        import structlog
+        log = structlog.get_logger("koboldcpp.handler")
+        log.info("KoboldCppLiteLLM.astreaming called", 
+                 api_base=api_base, 
+                 self_base_url=self.base_url,
+                 kwargs_keys=list(kwargs.keys()),
+                 model=model)
+        
+        payload = self._build_payload(messages, max_tokens, optional_params)
+        
+        log.info("Streaming request payload", 
+                 payload=payload,
+                 url=f"{api_base}/api/extra/generate/stream")
+        
+        async with httpx.AsyncClient(timeout=None) as client:
+            # Try POST method for streaming (some KoboldCpp versions use POST)
+            async with client.stream(
+                "POST",
+                f"{api_base}/api/extra/generate/stream",
+                json=payload,
+            ) as resp:
+                log.info("Streaming response started", 
+                         status_code=resp.status_code,
+                         headers=dict(resp.headers))
+                
+                # Check if streaming endpoint exists
+                if resp.status_code != 200:
+                    log.error(f"KoboldCpp streaming endpoint returned {resp.status_code}. Response: {await resp.aread()}")
+                    raise Exception(f"KoboldCpp streaming endpoint not available (status: {resp.status_code})")
+                
+                idx = 0
+                async for raw in resp.aiter_lines():
+                    log.debug("Received line", raw=raw)
+                    if not raw or not raw.startswith("data:"):
+                        continue
+                    tok = json.loads(raw[5:].strip())
+                    if tok.get("token") is None:
+                        continue
+                    log.debug("Yielding token", token=tok["token"], idx=idx)
+                    yield {
+                        "index": idx,
+                        "text": tok["token"],
+                        "finish_reason": None,
+                        "is_finished": False,
+                        "tool_use": None,
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 1, "total_tokens": 1},
+                    }
+                    idx += 1
+                yield {
+                    "index": idx,
+                    "text": "",
+                    "finish_reason": "stop",
+                    "is_finished": True,
+                    "tool_use": None,
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                }
+
+    # ------------------------------------------------------------------
+    # Model discovery
+    # ------------------------------------------------------------------
+    def list_models(self) -> list[str]:
+        """
+        KoboldCpp runs exactly one model at a time; `/api/v1/model`
+        returns its short name.
+        """
+        try:
+            r = requests.get(f"{self.base_url}/api/v1/model", timeout=5)
+            name = r.json().get("result") or r.text.strip()
+            return [f"koboldcpp/{name}"]
+        except Exception:
+            # If the endpoint is disabled just fall back to a synthetic id
+            return ["koboldcpp/unknown"]
+
+    def get_model_info(self, model: str) -> ModelInfoBase:          # LiteLLM hook
+        """
+        Populate LiteLLM’s `ModelInfoBase` from the three public
+        endpoints KoboldCpp exposes.
+        """
+        # 1. canonical name
+        info = requests.get(f"{self.base_url}/api/v1/model").json()        # { result: "Llama-3-8B-Q6_K" }
+        real_name = info.get("result", "unknown")
+
+        # 2 + 3. context & generation limits
+        ctx = requests.get(f"{self.base_url}/api/v1/config/max_context_length").json().get("value", None)
+        gen = requests.get(f"{self.base_url}/api/v1/config/max_length").json().get("value", None)
+
+        return ModelInfoBase(
+            key=f"koboldcpp/{real_name}",
+            litellm_provider="koboldcpp",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=gen,
+            max_input_tokens=ctx,
+            max_output_tokens=gen,
+        )
+
+
+
+
+
+
+
+
+
+
+
+
+
+

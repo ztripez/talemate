@@ -413,247 +413,89 @@
                                         </div>
                                     </v-alert>
                                     
-                                    <div class="mb-4">
+                                    <div class="mb-4 d-flex align-center">
+                                        <!-- Searchable dropdown for adding providers -->
+                                        <v-autocomplete
+                                            v-model="selectedProvider"
+                                            :items="getAvailableProviders()"
+                                            :loading="loadingProviders"
+                                            item-title="name"
+                                            item-value="identifier"
+                                            label="Add a provider"
+                                            placeholder="Search providers..."
+                                            density="compact"
+                                            variant="outlined"
+                                            prepend-inner-icon="mdi-magnify"
+                                            clearable
+                                            hide-details
+                                            class="mr-2"
+                                            style="max-width: 400px;"
+                                            @update:modelValue="onProviderSelected"
+                                        >
+                                            <template v-slot:item="{ props, item }">
+                                                <v-list-item v-bind="props">
+                                                    <template v-slot:prepend>
+                                                        <v-icon>mdi-cloud</v-icon>
+                                                    </template>
+                                                    <v-list-item-title>{{ item.raw.name }}</v-list-item-title>
+                                                    <v-list-item-subtitle>{{ item.raw.identifier }}</v-list-item-subtitle>
+                                                </v-list-item>
+                                            </template>
+                                        </v-autocomplete>
+                                        
                                         <v-btn
                                             color="primary"
                                             variant="outlined"
                                             prepend-icon="mdi-robot-outline"
                                             @click="showModelSelector = true"
+                                            class="mr-2"
                                         >
                                             Browse Models
                                         </v-btn>
-                                        <ChatTest class="ml-2" @notify="handleNotification" />
+                                        <ChatTest @notify="handleNotification" />
                                     </div>
                                     
                                     <v-progress-linear v-if="loadingProviders" indeterminate color="primary" class="mb-4"></v-progress-linear>
                                     
-                                    <div v-if="!loadingProviders && providers.length === 0" class="text-center py-8">
+                                    <div v-if="!loadingProviders && getConfiguredProviders().length === 0" class="text-center py-8">
                                         <v-icon size="64" color="grey">mdi-cloud-off-outline</v-icon>
-                                        <div class="text-h6 text-grey mt-2">No providers available</div>
-                                        <div class="text-body-2 text-grey">LiteLLM providers are not configured</div>
+                                        <div class="text-h6 text-grey mt-2">No providers configured</div>
+                                        <div class="text-body-2 text-grey">Select a provider from the dropdown above to get started</div>
                                     </div>
                                     
-                                    <v-row v-if="!loadingProviders && providers.length > 0">
-                                        <!-- Single Instance Providers -->
-                                        <v-col cols="12" md="6" v-for="provider in getSingleInstanceProviders()" :key="provider.identifier">
+                                    <!-- Configured provider instances as cards -->
+                                    <v-row v-if="!loadingProviders && getConfiguredProviders().length > 0">
+                                        <v-col cols="12" md="6" v-for="instance in getConfiguredProviders()" :key="instance.id">
                                             <v-card elevation="2" class="mb-4">
                                                 <v-card-title class="d-flex align-center">
-                                                    <v-icon class="mr-2">mdi-cloud</v-icon>
-                                                    {{ provider.name }}
+                                                    <v-icon class="mr-2">mdi-cloud-check</v-icon>
+                                                    {{ instance.providerName }}
                                                     <v-spacer></v-spacer>
-                                                    <v-chip size="small" color="primary">{{ provider.identifier }}</v-chip>
+                                                    <v-chip size="small" color="primary">{{ instance.settings.provider_id }}</v-chip>
                                                 </v-card-title>
+                                                <v-card-subtitle v-if="instance.name">
+                                                    {{ instance.name }}
+                                                </v-card-subtitle>
                                                 <v-card-text>
                                                     <div class="text-body-2 text-grey mb-3">
-                                                        Configure {{ provider.name }} settings
+                                                        {{ getProviderDescription(instance.settings.provider_id) }}
                                                     </div>
-                                                    
-                                                    <v-form v-if="provider.settings_schema && providerSettings[provider.identifier]">
-                                                        <!-- Basic/Required Settings -->
-                                                        <div v-for="setting in getBasicSettings(provider.settings_schema)" :key="setting.key" class="mb-3">
-                                                            <v-text-field
-                                                                v-if="setting.type === 'text'"
-                                                                v-model="providerSettings[provider.identifier][setting.key]"
-                                                                :label="setting.label"
-                                                                :hint="setting.description"
-                                                                :required="setting.required"
-                                                                density="compact"
-                                                                variant="outlined"
-                                                                persistent-hint
-                                                            ></v-text-field>
-                                                            
-                                                            <v-text-field
-                                                                v-else-if="setting.type === 'password'"
-                                                                v-model="providerSettings[provider.identifier][setting.key]"
-                                                                :label="setting.label"
-                                                                :hint="setting.description"
-                                                                :required="setting.required"
-                                                                type="password"
-                                                                density="compact"
-                                                                variant="outlined"
-                                                                persistent-hint
-                                                            ></v-text-field>
-                                                            
-                                                            <v-text-field
-                                                                v-else-if="setting.type === 'number'"
-                                                                v-model.number="providerSettings[provider.identifier][setting.key]"
-                                                                :label="setting.label"
-                                                                :hint="setting.description"
-                                                                :required="setting.required"
-                                                                type="number"
-                                                                density="compact"
-                                                                variant="outlined"
-                                                                persistent-hint
-                                                            ></v-text-field>
-                                                            
-                                                            <v-switch
-                                                                v-else-if="setting.type === 'boolean'"
-                                                                v-model="providerSettings[provider.identifier][setting.key]"
-                                                                :label="setting.label"
-                                                                :hint="setting.description"
-                                                                density="compact"
-                                                                color="primary"
-                                                                persistent-hint
-                                                            ></v-switch>
-                                                            
-                                                            <v-select
-                                                                v-else-if="setting.type === 'select'"
-                                                                v-model="providerSettings[provider.identifier][setting.key]"
-                                                                :label="setting.label"
-                                                                :hint="setting.description"
-                                                                :items="setting.options"
-                                                                :required="setting.required"
-                                                                density="compact"
-                                                                variant="outlined"
-                                                                persistent-hint
-                                                            ></v-select>
-                                                        </div>
-                                                        
-                                                        <!-- Advanced Settings Toggle -->
-                                                        <div v-if="getAdvancedSettings(provider.settings_schema).length > 0" class="mb-3">
-                                                            <v-btn
-                                                                @click="toggleAdvanced(provider.identifier)"
-                                                                variant="text"
-                                                                size="small"
-                                                                :prepend-icon="showAdvanced[provider.identifier] ? 'mdi-chevron-up' : 'mdi-chevron-down'"
-                                                                color="primary"
-                                                            >
-                                                                {{ showAdvanced[provider.identifier] ? 'Hide' : 'Show' }} Advanced Settings
-                                                            </v-btn>
-                                                        </div>
-                                                        
-                                                        <!-- Advanced Settings -->
-                                                        <v-expand-transition>
-                                                            <div v-if="showAdvanced[provider.identifier]">
-                                                                <div v-for="setting in getAdvancedSettings(provider.settings_schema)" :key="setting.key" class="mb-3">
-                                                                    <v-text-field
-                                                                        v-if="setting.type === 'text'"
-                                                                        v-model="providerSettings[provider.identifier][setting.key]"
-                                                                        :label="setting.label"
-                                                                        :hint="setting.description"
-                                                                        :required="setting.required"
-                                                                        density="compact"
-                                                                        variant="outlined"
-                                                                        persistent-hint
-                                                                    ></v-text-field>
-                                                                    
-                                                                    <v-text-field
-                                                                        v-else-if="setting.type === 'password'"
-                                                                        v-model="providerSettings[provider.identifier][setting.key]"
-                                                                        :label="setting.label"
-                                                                        :hint="setting.description"
-                                                                        :required="setting.required"
-                                                                        type="password"
-                                                                        density="compact"
-                                                                        variant="outlined"
-                                                                        persistent-hint
-                                                                    ></v-text-field>
-                                                                    
-                                                                    <v-text-field
-                                                                        v-else-if="setting.type === 'number'"
-                                                                        v-model.number="providerSettings[provider.identifier][setting.key]"
-                                                                        :label="setting.label"
-                                                                        :hint="setting.description"
-                                                                        :required="setting.required"
-                                                                        type="number"
-                                                                        density="compact"
-                                                                        variant="outlined"
-                                                                        persistent-hint
-                                                                    ></v-text-field>
-                                                                    
-                                                                    <v-switch
-                                                                        v-else-if="setting.type === 'boolean'"
-                                                                        v-model="providerSettings[provider.identifier][setting.key]"
-                                                                        :label="setting.label"
-                                                                        :hint="setting.description"
-                                                                        density="compact"
-                                                                        color="primary"
-                                                                        persistent-hint
-                                                                    ></v-switch>
-                                                                    
-                                                                    <v-select
-                                                                        v-else-if="setting.type === 'select'"
-                                                                        v-model="providerSettings[provider.identifier][setting.key]"
-                                                                        :label="setting.label"
-                                                                        :hint="setting.description"
-                                                                        :items="setting.options"
-                                                                        :required="setting.required"
-                                                                        density="compact"
-                                                                        variant="outlined"
-                                                                        persistent-hint
-                                                                    ></v-select>
-                                                                </div>
-                                                            </div>
-                                                        </v-expand-transition>
-                                                    </v-form>
                                                 </v-card-text>
                                                 <v-card-actions>
                                                     <v-spacer></v-spacer>
-                                                    <v-btn 
-                                                        color="primary" 
-                                                        variant="outlined" 
-                                                        size="small"
-                                                        @click="saveProviderSettings(provider.identifier)"
-                                                    >
-                                                        Save Settings
-                                                    </v-btn>
-                                                </v-card-actions>
-                                            </v-card>
-                                        </v-col>
-                                        
-                                        <!-- Multi-Instance Providers -->
-                                        <v-col cols="12" v-for="provider in getMultiInstanceProviders()" :key="provider.identifier">
-                                            <v-card elevation="2" class="mb-4">
-                                                <v-card-title class="d-flex align-center">
-                                                    <v-icon class="mr-2">mdi-cloud-plus</v-icon>
-                                                    {{ provider.name }}
-                                                    <v-spacer></v-spacer>
-                                                    <v-chip size="small" color="secondary">Multi-Instance</v-chip>
-                                                </v-card-title>
-                                                <v-card-text>
-                                                    <div class="text-body-2 text-grey mb-3">
-                                                        Create multiple instances of {{ provider.name }} with different configurations
-                                                    </div>
-                                                    
-                                                    <!-- Existing Instances -->
-                                                    <div v-if="getProviderInstances(provider.identifier).length > 0" class="mb-4">
-                                                        <h4 class="text-subtitle-2 text-grey mb-2">Existing Instances</h4>
-                                                        <v-card 
-                                                            v-for="instance in getProviderInstances(provider.identifier)" 
-                                                            :key="instance.id"
-                                                            elevation="1" 
-                                                            class="mb-2"
-                                                        >
-                                                            <v-card-title class="d-flex align-center py-2">
-                                                                <v-icon size="small" class="mr-2">mdi-server</v-icon>
-                                                                <span class="font-weight-regular">{{ instance.name || instance.id }}</span>
-                                                                <v-spacer></v-spacer>
-                                                                <v-btn
-                                                                    @click="editProviderInstance(provider.identifier, instance.id)"
-                                                                    size="small"
-                                                                    variant="text"
-                                                                    icon="mdi-pencil"
-                                                                ></v-btn>
-                                                                <v-btn
-                                                                    @click="deleteProviderInstance(provider.identifier, instance.id)"
-                                                                    size="small"
-                                                                    variant="text"
-                                                                    icon="mdi-delete"
-                                                                    color="error"
-                                                                ></v-btn>
-                                                            </v-card-title>
-                                                        </v-card>
-                                                    </div>
-                                                </v-card-text>
-                                                <v-card-actions>
                                                     <v-btn
-                                                        @click="addProviderInstance(provider.identifier)"
-                                                        color="primary"
-                                                        variant="outlined"
-                                                        prepend-icon="mdi-plus"
-                                                    >
-                                                        Add Instance
-                                                    </v-btn>
+                                                        @click="editProviderInstance(instance.settings.provider_id, instance.id)"
+                                                        size="small"
+                                                        variant="text"
+                                                        icon="mdi-pencil"
+                                                    ></v-btn>
+                                                    <v-btn
+                                                        @click="deleteProviderInstance(instance.settings.provider_id, instance.id)"
+                                                        size="small"
+                                                        variant="text"
+                                                        icon="mdi-delete"
+                                                        color="error"
+                                                    ></v-btn>
                                                 </v-card-actions>
                                             </v-card>
                                         </v-col>
@@ -846,6 +688,8 @@ export default {
             providerInstances: {}, // For multi-instance providers
             editingInstance: null, // Currently editing instance
             instanceEditDialog: false, // Instance edit dialog visibility
+            selectedProvider: null, // Selected provider from dropdown
+            configuredInstances: {}, // All configured provider instances
             googleCloudLocations: [
                 {"value": 'us-central1', "title": 'US Central - Iowa'},
                 {"value": 'us-west4', "title": 'US West 4 - Las Vegas'},
@@ -939,19 +783,15 @@ export default {
                     this.handleProvidersMessage(message);
                 } else if (message.action == 'provider_save_complete') {
                     console.log('Provider settings saved:', message.data);
-                    // Could show a toast/snackbar here
+                    // Refresh providers to get updated instance list
+                    this.requestProviders();
                 } else if (message.action == 'provider_save_error') {
                     console.error('Provider save error:', message.data);
                     // Could show error toast/snackbar here
-                } else if (message.action == 'provider_instance_save_complete') {
-                    console.log('Provider instance saved:', message.data);
-                    // Could show a toast/snackbar here
-                } else if (message.action == 'provider_instance_save_error') {
-                    console.error('Provider instance save error:', message.data);
-                    // Could show error toast/snackbar here
                 } else if (message.action == 'provider_instance_delete_complete') {
                     console.log('Provider instance deleted:', message.data);
-                    // Could show a toast/snackbar here
+                    // Refresh providers to get updated instance list
+                    this.requestProviders();
                 } else if (message.action == 'provider_instance_delete_error') {
                     console.error('Provider instance delete error:', message.data);
                     // Could show error toast/snackbar here
@@ -1015,43 +855,23 @@ export default {
             });
         },
         
-        saveProviderSettings(providerId) {
-            const settings = this.providerSettings[providerId];
-            console.log('Saving provider settings', { providerId, settings });
-            
-            // TODO: Send provider settings to backend
-            this.sendRequest({
-                action: 'save_provider_settings',
-                provider_id: providerId,
-                settings: settings
-            });
-        },
         
         initializeProviderSettings() {
             // Initialize settings object for each provider
+            this.configuredInstances = {};
+            
             this.providers.forEach(provider => {
-                if (provider.multi_instance) {
-                    // Load instances for multi-instance providers
-                    this.providerInstances[provider.identifier] = provider.instances || [];
-                } else {
-                    // Initialize single-instance provider settings
-                    if (!this.providerSettings[provider.identifier]) {
-                        const providerDefaults = {};
-                        
-                        // Set values from saved settings first, then defaults
-                        provider.settings_schema.forEach(setting => {
-                            // Check if there's a saved value for this setting
-                            if (provider.saved_settings && provider.saved_settings[setting.key] !== undefined) {
-                                providerDefaults[setting.key] = provider.saved_settings[setting.key];
-                            } else if (setting.default !== null && setting.default !== undefined) {
-                                providerDefaults[setting.key] = setting.default;
-                            } else {
-                                providerDefaults[setting.key] = '';
-                            }
-                        });
-                        
-                        this.providerSettings[provider.identifier] = providerDefaults;
-                    }
+                // All providers are now multi-instance
+                if (provider.instances && provider.instances.length > 0) {
+                    provider.instances.forEach(instance => {
+                        this.configuredInstances[instance.id] = {
+                            id: instance.id,
+                            name: instance.name,
+                            settings: instance.settings,
+                            providerName: provider.name,
+                            providerId: provider.identifier
+                        };
+                    });
                 }
                 
                 // Initialize advanced settings visibility
@@ -1082,28 +902,53 @@ export default {
             this.showAdvanced[providerId] = !current;
         },
         
-        getSingleInstanceProviders() {
-            return this.providers.filter(provider => !provider.multi_instance);
+        getAvailableProviders() {
+            // Return providers that haven't been configured yet
+            return this.providers.filter(provider => {
+                // Check if any instance of this provider exists
+                const hasInstance = Object.values(this.configuredInstances).some(
+                    instance => instance.settings.provider_id === provider.identifier
+                );
+                return !hasInstance;
+            });
         },
         
-        getMultiInstanceProviders() {
-            return this.providers.filter(provider => provider.multi_instance);
+        getConfiguredProviders() {
+            // Return all configured provider instances
+            return Object.values(this.configuredInstances);
         },
         
-        getProviderInstances(providerId) {
-            return this.providerInstances[providerId] || [];
+        getProviderDescription(providerId) {
+            const provider = this.providers.find(p => p.identifier === providerId);
+            return provider ? `${provider.name} instance` : 'Provider instance';
+        },
+        
+        onProviderSelected(providerId) {
+            if (!providerId) return;
+            
+            const provider = this.providers.find(p => p.identifier === providerId);
+            if (!provider) return;
+            
+            // Clear selection
+            this.selectedProvider = null;
+            
+            // Open dialog to configure new instance
+            this.addProviderInstance(providerId);
         },
         
         addProviderInstance(providerId) {
             const provider = this.providers.find(p => p.identifier === providerId);
             if (!provider) return;
             
-            const instanceId = `${providerId}_${Date.now()}`;
+            // Generate a UUID for the instance
+            const instanceId = this.generateUUID();
             const newInstance = {
                 provider: providerId,
                 id: instanceId,
                 name: '',
-                settings: {}
+                settings: {
+                    provider_id: providerId // Add provider_id to settings
+                }
             };
             
             // Initialize with defaults
@@ -1129,9 +974,18 @@ export default {
             this.instanceEditDialog = true;
         },
         
+        generateUUID() {
+            // Simple UUID v4 generator
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        },
+        
         editProviderInstance(providerId, instanceId) {
             const provider = this.providers.find(p => p.identifier === providerId);
-            const instance = this.providerInstances[providerId]?.find(inst => inst.id === instanceId);
+            const instance = this.configuredInstances[instanceId];
             
             if (!provider || !instance) return;
             
@@ -1139,7 +993,11 @@ export default {
                 providerId: providerId,
                 providerName: provider.name,
                 instanceId: instanceId,
-                instance: instance,
+                instance: {
+                    id: instanceId,
+                    name: instance.name,
+                    settings: instance.settings
+                },
                 settings: { ...instance.settings },
                 schema: provider.settings_schema,
                 isNew: false,
@@ -1149,42 +1007,46 @@ export default {
         },
         
         deleteProviderInstance(providerId, instanceId) {
-            if (!this.providerInstances[providerId]) return;
-            
             // Send delete request to backend
             this.sendRequest({
                 action: 'delete_provider_instance',
-                provider_id: providerId,
                 instance_id: instanceId
             });
             
             // Remove from frontend immediately (optimistic update)
-            const index = this.providerInstances[providerId].findIndex(instance => instance.id === instanceId);
-            if (index !== -1) {
-                this.providerInstances[providerId].splice(index, 1);
-            }
+            delete this.configuredInstances[instanceId];
         },
         
         saveInstanceEdit() {
             if (!this.editingInstance) return;
             
-            const { providerId, instanceId, settings, isNew, instance } = this.editingInstance;
+            const { providerId, instanceId, settings, isNew, instance, providerName } = this.editingInstance;
             
             // Update the instance settings
             instance.settings = { ...settings };
             instance.name = settings.instance_name || instanceId;
             
             if (isNew) {
-                // Add to instances array
-                if (!this.providerInstances[providerId]) {
-                    this.providerInstances[providerId] = [];
-                }
-                this.providerInstances[providerId].push(instance);
+                // Add to configured instances
+                this.configuredInstances[instanceId] = {
+                    id: instanceId,
+                    name: instance.name,
+                    settings: instance.settings,
+                    providerName: providerName,
+                    providerId: providerId
+                };
+            } else {
+                // Update existing instance
+                this.configuredInstances[instanceId] = {
+                    ...this.configuredInstances[instanceId],
+                    name: instance.name,
+                    settings: instance.settings
+                };
             }
             
             // Save to backend
             this.sendRequest({
-                action: 'save_provider_instance',
+                action: 'save_provider_settings',
                 provider_id: providerId,
                 instance_id: instanceId,
                 settings: settings

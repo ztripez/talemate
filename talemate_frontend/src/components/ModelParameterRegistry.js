@@ -308,6 +308,186 @@ export const parameterRegistry = {
     hint: 'Minimum probability threshold'
   },
   
+  // Additional KoboldCpp parameters
+  typical_p: {
+    type: 'slider',
+    label: 'Typical P',
+    default: 1.0,
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+    hint: 'Typical sampling value (1.0 = disabled)'
+  },
+  
+  tfs_z: {
+    type: 'slider',
+    label: 'TFS Z',
+    default: 1.0,
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+    hint: 'Tail free sampling (1.0 = disabled)'
+  },
+  
+  rep_pen_slope: {
+    type: 'slider',
+    label: 'Repetition Penalty Slope',
+    default: 1.0,
+    min: 0.0,
+    max: 10.0,
+    step: 0.1,
+    hint: 'Slope for repetition penalty decay'
+  },
+  
+  single_line: {
+    type: 'switch',
+    label: 'Single Line',
+    default: false,
+    hint: 'Stop generation at line break'
+  },
+  
+  sampler_seed: {
+    type: 'number',
+    label: 'Sampler Seed',
+    default: -1,
+    min: -1,
+    hint: 'Seed for sampling (-1 = random)'
+  },
+  
+  use_default_badwordsids: {
+    type: 'switch',
+    label: 'Use Default Bad Words',
+    default: false,
+    hint: 'Apply default bad words filter'
+  },
+  
+  dynatemp_exponent: {
+    type: 'slider',
+    label: 'Dynamic Temperature Exponent',
+    default: 1.0,
+    min: 0.0,
+    max: 5.0,
+    step: 0.1,
+    hint: 'Exponent for dynamic temperature calculation'
+  },
+  
+  smoothing_curve: {
+    type: 'slider',
+    label: 'Smoothing Curve',
+    default: 1.0,
+    min: 0.0,
+    max: 10.0,
+    step: 0.1,
+    hint: 'Curve factor for smoothing'
+  },
+  
+  banned_tokens: {
+    type: 'chips',
+    label: 'Banned Tokens',
+    default: [],
+    hint: 'List of banned token IDs'
+  },
+  
+  sampler_priority: {
+    type: 'chips',
+    label: 'Sampler Priority',
+    default: [],
+    hint: 'Order of samplers to apply'
+  },
+  
+  ignore_eos: {
+    type: 'switch',
+    label: 'Ignore EOS',
+    default: false,
+    hint: 'Continue generation past EOS token'
+  },
+  
+  spaces_between_special_tokens: {
+    type: 'switch',
+    label: 'Spaces Between Special Tokens',
+    default: true,
+    hint: 'Add spaces between special tokens'
+  },
+  
+  speculative_ngram: {
+    type: 'switch',
+    label: 'Speculative N-gram',
+    default: false,
+    hint: 'Enable speculative n-gram generation'
+  },
+  
+  streaming: {
+    type: 'switch',
+    label: 'Streaming',
+    default: false,
+    hint: 'Enable streaming responses'
+  },
+  
+  xtc_threshold: {
+    type: 'slider',
+    label: 'XTC Threshold',
+    default: 0.1,
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+    hint: 'Threshold for XTC sampling'
+  },
+  
+  xtc_probability: {
+    type: 'slider',
+    label: 'XTC Probability',
+    default: 0.0,
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+    hint: 'Probability of applying XTC sampling'
+  },
+  
+  dry_multiplier: {
+    type: 'slider',
+    label: 'DRY Multiplier',
+    default: 0.0,
+    min: 0.0,
+    max: 5.0,
+    step: 0.1,
+    hint: 'Multiplier for DRY penalty'
+  },
+  
+  dry_base: {
+    type: 'slider',
+    label: 'DRY Base',
+    default: 1.75,
+    min: 1.0,
+    max: 10.0,
+    step: 0.05,
+    hint: 'Base value for DRY penalty calculation'
+  },
+  
+  dry_allowed_length: {
+    type: 'number',
+    label: 'DRY Allowed Length',
+    default: 2,
+    min: 1,
+    max: 100,
+    hint: 'Allowed sequence length before DRY penalty'
+  },
+  
+  dry_penalty_last_n: {
+    type: 'number',
+    label: 'DRY Penalty Last N',
+    default: 0,
+    min: 0,
+    max: 4096,
+    hint: 'Number of tokens to consider for DRY penalty (0 = all)'
+  },
+  
+  dry_sequence_breakers: {
+    type: 'chips',
+    label: 'DRY Sequence Breakers',
+    default: [],
+    hint: 'Tokens that break DRY sequences'
+  },
+  
   // Anthropic specific
   top_p_k: {
     type: 'number',

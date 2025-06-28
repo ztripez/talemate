@@ -128,7 +128,12 @@ class BaseProvider(ABC):
         # Log what we're sending for debugging
         import structlog
         log = structlog.get_logger("litellm.provider")
-        log.debug("LiteLLM params", model=params.get("model"), drop_params=params.get("drop_params"), params=params)
+        log.debug("LiteLLM params", 
+                  provider_class=self.__class__.__name__,
+                  model=params.get("model"), 
+                  api_base=params.get("api_base"),
+                  drop_params=params.get("drop_params"), 
+                  param_keys=list(params.keys()))
         
 
         try:
@@ -161,7 +166,7 @@ class BaseProvider(ABC):
             
             # Try different methods to get models
             try:
-                models = litellm.get_valid_models(custom_llm_provider=self.get_provider_identifier())
+                models = litellm.get_valid_models(custom_llm_provider=self.get_provider_identifier(),check_provider_endpoint=True)
                 if models:
                     return models
             except:

@@ -1,0 +1,106 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Install Dependencies",
+            "type": "shell",
+            "command": "uv sync --extra cpu",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Install Dev Dependencies",
+            "type": "shell",
+            "command": "uv sync --dev --extra cpu",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Install Frontend Dependencies",
+            "type": "shell",
+            "command": "npm install",
+            "options": {
+                "cwd": "${workspaceFolder}/talemate_frontend"
+            },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Format Code",
+            "type": "shell",
+            "command": "uv run black .",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Sort Imports",
+            "type": "shell",
+            "command": "uv run isort .",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "Lint Code",
+            "type": "shell",
+            "command": "uv run ruff check .",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "Type Check",
+            "type": "shell",
+            "command": "uv run mypy .",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Tests",
+            "type": "shell",
+            "command": "uv run pytest",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build Frontend",
+            "type": "shell",
+            "command": "npm run build",
+            "options": {
+                "cwd": "${workspaceFolder}/talemate_frontend"
+            },
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Lint Frontend",
+            "type": "shell",
+            "command": "npm run lint",
+            "options": {
+                "cwd": "${workspaceFolder}/talemate_frontend"
+            },
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "Full Install",
+            "type": "shell",
+            "command": "./install.sh",
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "Start Full Application",
+            "type": "shell",
+            "command": "./start.sh",
+            "group": "none",
+            "problemMatcher": [],
+            "isBackground": true
+        }
+    ]
+}
