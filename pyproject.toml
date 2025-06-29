@@ -32,10 +32,7 @@ dependencies = [
     "structlog>=23.1.0",
     # 1.7.11 breaks subprocess stuff ???
     "runpod==1.7.10",
-<<<<<<< HEAD
-=======
     "google-genai>=1.20.0",
->>>>>>> upstream/prep-0.31.0
     "nest_asyncio>=1.5.7",
     "isodate>=0.6.1",
     "thefuzz>=0.20.0",
@@ -49,10 +46,7 @@ dependencies = [
     "limits>=5.0",
     "diff-match-patch>=20241021",
     "sseclient-py>=1.8.0",
-<<<<<<< HEAD
-=======
     "ollama>=0.5.1",
->>>>>>> upstream/prep-0.31.0
     # ChromaDB
     "chromadb>=1.0.12",
     "InstructorEmbedding @ https://github.com/vegu-ai/instructor-embedding/archive/refs/heads/202506-fixes.zip",
@@ -61,11 +55,8 @@ dependencies = [
     # locked for instructor embeddings
     #sentence-transformers==2.2.2
     "sentence_transformers>=2.7.0",
-<<<<<<< HEAD
     "litellm>=1.73.1",
     "instructor[litellm]>=1.9.0",
-=======
->>>>>>> upstream/prep-0.31.0
 ]
 
 [project.optional-dependencies]

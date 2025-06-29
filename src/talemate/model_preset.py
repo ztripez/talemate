@@ -271,6 +271,57 @@ class ModelPreset:
         """Quick access to config ID"""
         return self.model_config.config_id
     
+    async def request_clean(self, uid: str, vars: dict, response_model=None, **kwargs):
+        """Request using clean prompt system with instructor for structured output"""
+        from talemate.llm_providers.prompt_handler import CleanPrompt
+        
+        provider = self.get_provider()
+        if not provider:
+            raise RuntimeError("No provider available")
+            
+        # Parse UID
+        agent_type, prompt_name = uid.split(".", 1) if "." in uid else ("", uid)
+        
+        # Create clean prompt
+        prompt = CleanPrompt(
+            uid=uid,
+            agent_type=agent_type,
+            name=prompt_name,
+            vars=vars
+        )
+        
+        # Render prompt text
+        prompt_text = prompt.render()
+        
+        # Get system message from client
+        kind = kwargs.get('kind', 'create')
+        client = self.get_client()
+        system_message = ""
+        if client:
+            system_message = client.get_system_message(kind)
+        
+        # Build messages for LiteLLM
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt_text}
+        ]
+        
+        # Get generation parameters
+        temperature = kwargs.get('temperature', 0.7)
+        max_tokens = kwargs.get('max_tokens', 512)
+        
+        # Generate with instructor
+        response = await provider.generate(
+            messages=messages,
+            model_name=self.model_name,
+            response_model=response_model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs
+        )
+        
+        return response
+    
     def to_client_dict(self, config, name: str | None = None):
         """Convert to the old client dictionary format expected by websocket_server"""
         client = self.get_old_client(config, name)

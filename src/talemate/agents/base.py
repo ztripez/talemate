@@ -269,6 +269,31 @@ class Agent(ABC):
             return self.model_preset.get_client()
         return self.client
     
+    async def request_with_instructor(self, template_name: str, vars: dict, response_model=None, **kwargs):
+        """
+        Use clean prompt system with instructor when ModelPreset available.
+        Falls back to old system for compatibility.
+        """
+        if self.model_preset:
+            try:
+                return await self.model_preset.request_clean(
+                    f"{self.agent_type}.{template_name}",
+                    vars,
+                    response_model=response_model,
+                    **kwargs
+                )
+            except Exception as e:
+                log.warning(f"Clean prompt failed, falling back: {e}")
+                
+        # Fallback to old system
+        from talemate.prompts import Prompt
+        return await Prompt.request(
+            f"{self.agent_type}.{template_name}",
+            self.client,
+            kwargs.get('kind', 'create'),
+            vars
+        )
+    
     @property
     def agent_details(self):
         if self.model_preset:

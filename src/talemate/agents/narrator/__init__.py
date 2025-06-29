@@ -230,48 +230,6 @@ class NarratorAgent(
 
     # get_provider_instance() now inherited from base Agent class
 
-    async def _narrate_with_provider(self, template_name: str, vars: dict, kind: str = "narrate", **kwargs):
-        """Helper method to handle narration with provider/instructor support"""
-        provider = self.get_provider_instance()
-        
-        if provider:
-            # Use provider with instructor support
-            prompt_obj = Prompt.get(template_name, vars=vars)
-            
-            # Render the prompt to get the actual text
-            prompt_text = prompt_obj.render()
-            
-            # Get system message from client
-            system_message = self.client.get_system_message(kind)
-            
-            messages = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt_text}
-            ]
-            
-            # Get generation parameters
-            temperature = kwargs.get('temperature', 0.7)
-            max_tokens = kwargs.get('max_tokens', self.client.max_token_length)
-            
-            response = await provider.generate(
-                messages=messages,
-                model_name=self.client.model_name,
-                response_model=NarratorResponse,
-                temperature=temperature,
-                max_tokens=max_tokens
-            )
-            
-            # If it's a structured response, extract the narration
-            if isinstance(response, NarratorResponse):
-                return response.narration
-            else:
-                # Provider fallback returned plain text
-                return response
-        
-        # No provider available - this shouldn't happen with new system
-        log.warning("No provider instance available for narrator - this indicates a configuration issue")
-        raise RuntimeError("No LLM provider available for narrator agent")
-
     @property
     def max_generation_length(self) -> int:
         if self.actions["generation_override"].enabled:
@@ -419,16 +377,23 @@ class NarratorAgent(
         """
         Narrate the scene
         """
-        response = await self._narrate_with_provider(
-            "narrator.narrate-scene",
+        response = await self.request_with_instructor(
+            "narrate-scene",
             vars={
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "extra_instructions": self.extra_instructions,
                 "narrative_direction": narrative_direction,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
 
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            return self.clean_result(response.narration)
+        
         return self.clean_result(response)
 
     @set_processing
@@ -454,25 +419,30 @@ class NarratorAgent(
             "narrative_direction", narrative_direction=narrative_direction
         )
 
-        response = await self._narrate_with_provider(
-            "narrator.narrate-progress",
+        response = await self.request_with_instructor(
+            "narrate-progress",
             vars={
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "narrative_direction": narrative_direction,
                 "player_character": pc,
                 "npcs": npcs,
                 "npc_names": npc_names,
                 "extra_instructions": self.extra_instructions,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
             temperature=0.7,
+            max_tokens=self.max_generation_length,
         )
 
         log.debug("progress_story", response=response)
 
-        response = self.clean_result(response.strip())
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            return self.clean_result(response.narration.strip())
         
-        return response
+        return self.clean_result(response.strip())
 
     @set_processing
     @store_context_state('query', query_narration=True)
@@ -482,25 +452,35 @@ class NarratorAgent(
         """
         Narrate a specific query
         """
-        response = await self._narrate_with_provider(
-            "narrator.narrate-query",
+        response = await self.request_with_instructor(
+            "narrate-query",
             vars={
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "query": query,
                 "at_the_end": at_the_end,
                 "as_narrative": as_narrative,
                 "extra_instructions": self.extra_instructions,
                 "extra_context": extra_context,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
-        response = self.clean_result(
-            response, 
+        
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            result = response.narration
+        else:
+            result = response
+            
+        result = self.clean_result(
+            result, 
             ensure_dialog_format=False, 
             force_narrative=as_narrative
         )
 
-        return response
+        return result
     
     @set_processing
     @store_context_state('character', 'narrative_direction', visual_narration=True)
@@ -509,20 +489,29 @@ class NarratorAgent(
         Narrate a specific character
         """
         
-        response = await self._narrate_with_provider(
-            "narrator.narrate-character",
+        response = await self.request_with_instructor(
+            "narrate-character",
             vars={
                 "scene": self.scene,
                 "character": character,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "extra_instructions": self.extra_instructions,
                 "narrative_direction": narrative_direction,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
 
-        response = self.clean_result(response, ensure_dialog_format=False, force_narrative=True)
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            result = response.narration
+        else:
+            result = response
+            
+        result = self.clean_result(result, ensure_dialog_format=False, force_narrative=True)
 
-        return response
+        return result
 
     @set_processing
     @store_context_state('narrative_direction', time_narration=True)
@@ -533,24 +522,29 @@ class NarratorAgent(
         Narrate a specific character
         """
 
-        response = await self._narrate_with_provider(
-            "narrator.narrate-time-passage",
+        response = await self.request_with_instructor(
+            "narrate-time-passage",
             vars={
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "duration": duration,
                 "time_passed": time_passed,
                 "narrative": narrative_direction, # backwards compatibility
                 "narrative_direction": narrative_direction,
                 "extra_instructions": self.extra_instructions,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
 
         log.debug("narrate_time_passage", response=response)
 
-        response = self.clean_result(response)
-
-        return response
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            return self.clean_result(response.narration)
+        
+        return self.clean_result(response)
 
     @set_processing
     @store_context_state('narrative_direction', sensory_narration=True)
@@ -563,21 +557,27 @@ class NarratorAgent(
         Narrate after a line of dialogue
         """
 
-        response = await self._narrate_with_provider(
-            "narrator.narrate-after-dialogue",
+        response = await self.request_with_instructor(
+            "narrate-after-dialogue",
             vars={
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "character": character,
                 "extra_instructions": self.extra_instructions,
                 "narrative_direction": narrative_direction,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
 
         log.debug("narrate_after_dialogue", response=response)
 
-        response = self.clean_result(response)
-        return response
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            return self.clean_result(response.narration)
+        
+        return self.clean_result(response)
 
     async def narrate_environment(self, narrative_direction: str = None):
         """
@@ -599,20 +599,25 @@ class NarratorAgent(
         Narrate a character entering the scene
         """
 
-        response = await self._narrate_with_provider(
-            "narrator.narrate-character-entry",
+        response = await self.request_with_instructor(
+            "narrate-character-entry",
             vars={
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "character": character,
                 "narrative_direction": narrative_direction,
                 "extra_instructions": self.extra_instructions,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
 
-        response = self.clean_result(response.strip("*"))
-
-        return response
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            return self.clean_result(response.narration.strip("*"))
+        
+        return self.clean_result(response.strip("*"))
 
     @set_processing
     @store_context_state('narrative_direction', 'character')
@@ -625,20 +630,25 @@ class NarratorAgent(
         Narrate a character exiting the scene
         """
 
-        response = await self._narrate_with_provider(
-            "narrator.narrate-character-exit",
+        response = await self.request_with_instructor(
+            "narrate-character-exit",
             vars={
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
                 "character": character,
                 "narrative_direction": narrative_direction,
                 "extra_instructions": self.extra_instructions,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
 
-        response = self.clean_result(response.strip("*"))
-
-        return response
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            return self.clean_result(response.narration.strip("*"))
+        
+        return self.clean_result(response.strip("*"))
 
     @set_processing
     async def paraphrase(self, narration: str):
@@ -646,20 +656,29 @@ class NarratorAgent(
         Paraphrase a narration
         """
 
-        response = await self._narrate_with_provider(
-            "narrator.paraphrase",
+        response = await self.request_with_instructor(
+            "paraphrase",
             vars={
                 "text": narration,
                 "scene": self.scene,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": self.max_generation_length,
             },
+            response_model=NarratorResponse,
+            kind="narrate",
+            max_tokens=self.max_generation_length,
         )
 
         log.debug("paraphrase", narration=narration, response=response)
 
-        response = self.clean_result(response.strip("*"))
+        # Extract narration from structured response
+        if isinstance(response, NarratorResponse):
+            result = response.narration.strip("*")
+        else:
+            result = response.strip("*")
+            
+        result = self.clean_result(result)
 
-        return response
+        return result
 
     async def passthrough(self, narration: str) -> str:
         """
