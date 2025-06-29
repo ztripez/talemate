@@ -35,9 +35,18 @@ IF %ERRORLEVEL% NEQ 0 (
     where bitsadmin >nul 2>&1 || CALL :die "Neither curl nor bitsadmin found. Cannot download files."
 )
 
+REM ---------[ Remove legacy Poetry venv if present ]---------
+IF EXIST "talemate_env" (
+    ECHO Detected legacy Poetry virtual environment 'talemate_env'. Removing...
+    RD /S /Q "talemate_env"
+    IF ERRORLEVEL 1 (
+        ECHO [WARNING] Failed to fully remove legacy 'talemate_env' directory. Continuing installation.
+    )
+)
+
 REM ---------[ Clean reinstall check ]---------
 SET "NEED_CLEAN=0"
-IF EXIST "talemate_env" SET "NEED_CLEAN=1"
+IF EXIST ".venv" SET "NEED_CLEAN=1"
 IF EXIST "embedded_python" SET "NEED_CLEAN=1"
 IF EXIST "embedded_node" SET "NEED_CLEAN=1"
 
@@ -52,7 +61,7 @@ IF "%NEED_CLEAN%"=="1" (
         GOTO :EOF
     )
     ECHO Removing previous installation...
-    IF EXIST "talemate_env" RD /S /Q "talemate_env"
+    IF EXIST ".venv" RD /S /Q ".venv"
     IF EXIST "embedded_python" RD /S /Q "embedded_python"
     IF EXIST "embedded_node" RD /S /Q "embedded_node"
     ECHO Cleanup complete.
@@ -136,7 +145,7 @@ REM Upgrade pip to latest
 
 REM ---------[ Install uv ]---------
 ECHO Installing uv...
-"%PYTHON%" -m pip install --no-warn-script-location uv || (
+"%PYTHON%" -m pip install uv || (
     CALL :die "uv installation failed."
 )
 
@@ -146,12 +155,15 @@ ECHO Creating virtual environment with uv...
     CALL :die "Virtual environment creation failed."
 )
 
+REM ---------[ Install dependencies using embedded Python's uv ]---------
+ECHO Installing backend dependencies with uv...
+"%PYTHON%" -m uv sync || CALL :die "Failed to install backend dependencies with uv."
+
 REM Activate the venv for the remainder of the script
 CALL .venv\Scripts\activate
 
-REM ---------[ Backend dependencies ]---------
-ECHO Installing backend dependencies with uv...
-uv sync --extra cpu || CALL :die "Failed to install backend dependencies with uv."
+REM echo python version
+python --version
 
 REM ---------[ Config file ]---------
 IF NOT EXIST config.yaml COPY config.example.yaml config.yaml

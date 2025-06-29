@@ -28,8 +28,15 @@ git remote add origin https://github.com/vegu-ai/talemate
 REM pull the latest changes from git repository
 git pull
 
-REM activate the virtual environment
-call .venv\Scripts\activate
+REM Check if .venv exists
+IF NOT EXIST ".venv" (
+    CALL :die ".venv directory not found. Please run install.bat first."
+)
+
+REM Check if embedded Python exists
+IF NOT EXIST "embedded_python\python.exe" (
+    CALL :die "embedded_python not found. Please run install.bat first."
+)
 
 REM ---------[ Use embedded Node.js ]---------
 SET "NODE_DIR=embedded_node"
@@ -43,7 +50,7 @@ ECHO Using embedded Node.js at %CD%\%NODE_DIR%\node.exe
 
 REM install dependencies with uv
 echo Updating virtual environment...
-uv sync --extra cpu || CALL :die "uv dependency sync failed."
+embedded_python\python.exe -m uv sync || CALL :die "uv dependency sync failed."
 
 echo Virtual environment updated!
 

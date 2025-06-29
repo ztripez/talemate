@@ -213,7 +213,10 @@ class MemoryAgent(Agent):
         """
         Returns a unique fingerprint for the current configuration
         """
-        return f"{self.embeddings}-{self.model.replace('/','-')}-{self.distance_function}-{self.device}-{self.trust_remote_code}".lower()   
+        
+        model_name = self.model.replace('/','-') if self.model else "none"
+        
+        return f"{self.embeddings}-{model_name}-{self.distance_function}-{self.device}-{self.trust_remote_code}".lower()   
 
     async def apply_config(self, *args, **kwargs):
         
@@ -232,7 +235,11 @@ class MemoryAgent(Agent):
     @set_processing
     async def handle_embeddings_change(self):
         scene = active_scene.get()
-        
+
+        # if sentence-transformer and no model-name, set embeddings to default
+        if self.using_sentence_transformer_embeddings and not self.model:
+            self.actions["_config"].config["embeddings"].value = "default"
+                
         if not scene or not scene.get_helper("memory"):
             return
         
@@ -284,6 +291,7 @@ class MemoryAgent(Agent):
             self.actions["_config"].config["embeddings"].value = event.client.embeddings_identifier
             await self.emit_status()
             await self.handle_embeddings_change()
+            await self.save_config()
 
     @set_processing
     async def set_db(self):
@@ -765,6 +773,16 @@ class ChromaDBMemoryAgent(MemoryAgent):
             
         if self.using_client_api_embeddings:
             embeddings_client:ClientBase | None = instance.get_client(self.embeddings_client)
+
+            if not embeddings_client:
+                details["error"] = {
+                    "icon": "mdi-alert",
+                    "value": f"Client {self.embeddings_client} not found",
+                    "description": f"Client {self.embeddings_client} not found",
+                    "color": "error",
+                }
+                return details
+
             client_name = embeddings_client.name
             
             if not embeddings_client.supports_embeddings:

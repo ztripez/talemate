@@ -291,27 +291,8 @@ class VisualBase(Agent):
     async def apply_config(self, *args, **kwargs):
 
         try:
-            actions = kwargs.get("actions", {})
-            if actions and "_config" in actions:
-                config_action = actions["_config"]
-                if config_action and hasattr(config_action, 'get') and "config" in config_action:
-                    config = config_action["config"]
-                    if config and hasattr(config, 'get') and "backend" in config:
-                        backend_config = config["backend"]
-                        if backend_config and hasattr(backend_config, 'get'):
-                            backend = backend_config.get("value")
-                        else:
-                            backend = None
-                    else:
-                        backend = None
-                else:
-                    backend = None
-            else:
-                backend = None
-                
-            if backend is None:
-                backend = self.backend
-        except (KeyError, TypeError, AttributeError):
+            backend = kwargs["actions"]["_config"]["config"]["backend"]["value"]
+        except (KeyError, TypeError):
             backend = self.backend
 
         backend_changed = backend != self.backend

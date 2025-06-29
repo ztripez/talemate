@@ -1,5 +1,5 @@
 # Stage 1: Frontend build
-FROM node:20-slim AS frontend-build
+FROM node:21-slim AS frontend-build
 
 WORKDIR /app
 
@@ -30,13 +30,13 @@ RUN apt-get update && apt-get install -y \
 RUN pip install uv
 
 # Copy installation files
-COPY pyproject.toml install.sh /app/
+COPY pyproject.toml uv.lock /app/
 
-# Run installation script
-RUN chmod +x install.sh && ./install.sh
-
-# Copy the Python source code
+# Copy the Python source code (needed for editable install)
 COPY ./src /app/src
+
+# Create virtual environment and install dependencies
+RUN uv sync
 
 # Conditional PyTorch+CUDA install
 ARG CUDA_AVAILABLE=false
@@ -44,7 +44,7 @@ RUN . /app/.venv/bin/activate && \
     if [ "$CUDA_AVAILABLE" = "true" ]; then \
         echo "Installing PyTorch with CUDA support..." && \
         uv pip uninstall torch torchaudio && \
-        uv pip install torch~=2.4.1 torchaudio~=2.4.1 --index-url https://download.pytorch.org/whl/cu121; \
+        uv pip install torch~=2.7.0 torchaudio~=2.7.0 --index-url https://download.pytorch.org/whl/cu128; \
     fi
 
 # Stage 3: Final image
