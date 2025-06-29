@@ -68,5 +68,9 @@ class ProviderRegistry:
             raise ValueError(f"Unknown provider: {identifier}")
         
         return self._providers[identifier].get_settings_schema()
+    
+    def get_provider(self, identifier: str) -> Optional[Type[BaseProvider]]:
+        """Get provider class by identifier"""
+        return self._providers.get(identifier)
 # Global registry instance
 registry = ProviderRegistry()

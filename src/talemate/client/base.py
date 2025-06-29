@@ -232,10 +232,18 @@ class ClientBase:
             # Existing initialization
             self.api_url = api_url
             self.name = name or self.client_type
+            self.api_key = kwargs.get('api_key')
+            self.model_name = kwargs.get('model_name')
             if "max_token_length" in kwargs:
-                self.max_token_length = (
-                    int(kwargs["max_token_length"]) if kwargs["max_token_length"] else 8192
-                )
+                # Only use default if max_token_length is None, not if it's 0 or other falsy values
+                max_token_value = kwargs["max_token_length"]
+                if max_token_value is not None:
+                    self.max_token_length = int(max_token_value)
+                else:
+                    self.max_token_length = 8192
+            else:
+                # Use default if not provided at all
+                self.max_token_length = 8192
         
         self.auto_determine_prompt_template_attempt = None
         self.log = structlog.get_logger(f"client.{self.client_type}")
@@ -244,6 +252,7 @@ class ClientBase:
         self.enabled = kwargs.get("enabled", True)
             
         self.set_client(max_token_length=self.max_token_length)
+
 
     def __str__(self):
         return f"{self.client_type}Client[{self.api_url}][{self.model_name or ''}]"

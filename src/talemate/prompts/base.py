@@ -291,6 +291,8 @@ class Prompt:
     async def request(
         cls, uid: str, client: Any, kind: str, vars: dict = None, **kwargs
     ):
+        if vars is None:
+            vars = {}
         if "decensor" not in vars:
             vars.update(decensor=client.decensor_enabled)
         prompt = cls.get(uid, vars)
@@ -440,7 +442,26 @@ class Prompt:
         # Load the template corresponding to the prompt name
         if not self.template:
             # no template text specified, load from file
-            template = env.get_template("{}.jinja2".format(self.name))
+            template_name = self.name
+            
+            # Check if client has reasoning capabilities and reasoning-specific template exists
+            if (self.client and
+                hasattr(self.client, 'model_config') and
+                self.client.model_config and
+                self.client.model_config.get("capabilities", {}).get("reasoning", False)):
+                
+                reasoning_template_name = f"{self.name}-reasoning"
+                try:
+                    # Try to load reasoning-specific template first
+                    template = env.get_template(f"{reasoning_template_name}.jinja2")
+                    log.debug("prompt.render", prompt=self.name, using_reasoning_template=True)
+                except jinja2.exceptions.TemplateNotFound:
+                    # Fall back to standard template if reasoning template doesn't exist
+                    template = env.get_template(f"{template_name}.jinja2")
+                    log.debug("prompt.render", prompt=self.name, reasoning_template_not_found=True, using_standard_template=True)
+            else:
+                # Use standard template
+                template = env.get_template(f"{template_name}.jinja2")
         else:
             template = env.from_string(self.template)
 

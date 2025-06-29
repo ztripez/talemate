@@ -32,6 +32,10 @@ class KoboldCppProvider(BaseProvider):
         return _identifier_
     
     @classmethod
+    def get_old_client_type(cls) -> str:
+        return "koboldcpp"
+    
+    @classmethod
     def get_settings_schema(cls) -> List[ProviderSetting]:
         return [
             ProviderSetting(

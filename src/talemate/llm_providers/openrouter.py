@@ -14,6 +14,10 @@ class OpenRouterProvider(BaseProvider):
         return "openrouter"
     
     @classmethod
+    def get_old_client_type(cls) -> str:
+        return "openrouter"
+    
+    @classmethod
     def get_settings_schema(cls) -> List[ProviderSetting]:
         return [
             ProviderSetting(
@@ -201,4 +205,60 @@ class OpenRouterProvider(BaseProvider):
         
         # For other group_by values, return indicator that this is a flat list
         return {"has_subgroups": False}
+    
+    def get_model_context_size(self, model_name: str) -> int | None:
+        """Get context size directly from OpenRouter API"""
+        try:
+            import requests
+            import structlog
+            
+            log = structlog.get_logger("talemate.llm_providers.openrouter")
+            
+            api_key = self._config.settings.get("api_key") if self._config else None
+            if not api_key:
+                log.warning("No API key available for OpenRouter context size lookup")
+                return None
+            
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            log.info(f"Fetching OpenRouter models to find context size for {model_name}")
+            
+            response = requests.get(
+                "https://openrouter.ai/api/v1/models",
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                models_data = response.json()
+                models = models_data.get("data", [])
+                
+                # Look for our model
+                log.info(f"Looking for model '{model_name}' in {len(models)} OpenRouter models")
+                
+                for model in models:
+                    model_id = model.get("id", "")
+                    if model_id == model_name:
+                        context_length = model.get("context_length")
+                        if context_length:
+                            log.info(f"Found OpenRouter context size for {model_name}: {context_length}")
+                            return int(context_length)
+                        else:
+                            log.warning(f"OpenRouter model {model_name} has no context_length field")
+                            return None
+                
+                log.warning(f"Model {model_name} not found in OpenRouter models list")
+                return None
+            else:
+                log.error(f"OpenRouter API request failed: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            import structlog
+            log = structlog.get_logger("talemate.llm_providers.openrouter")
+            log.error(f"Failed to fetch OpenRouter context size: {e}")
+            return None
     

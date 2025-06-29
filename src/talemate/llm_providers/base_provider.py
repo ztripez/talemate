@@ -41,6 +41,12 @@ class BaseProvider(ABC):
     
     @classmethod
     @abstractmethod
+    def get_old_client_type(cls) -> str:
+        """Return the old client type string for backward compatibility"""
+        pass
+    
+    @classmethod
+    @abstractmethod
     def get_settings_schema(cls) -> List[ProviderSetting]:
         """Return the settings schema for frontend configuration"""
         pass
@@ -268,5 +274,28 @@ class BaseProvider(ABC):
             return params if params else ["temperature", "max_tokens", "top_p"]
         except (AttributeError, Exception):
             return ["temperature", "max_tokens", "top_p"]
+    
+    def get_model_context_size(self, model_name: str) -> int | None:
+        """Get the context window size for a model. Override in provider subclasses for custom logic."""
+        try:
+            from litellm.utils import get_max_tokens
+            import structlog
+            
+            log = structlog.get_logger("talemate.llm_providers.base")
+            
+            full_model_name = f"{self.get_provider_identifier()}/{model_name}"
+            log.info(f"Getting context size for model: {full_model_name}")
+            
+            max_tokens = get_max_tokens(full_model_name)
+            log.info(f"LiteLLM get_max_tokens returned: {max_tokens} (type: {type(max_tokens)})")
+            
+            return max_tokens if max_tokens else None
+                    
+        except Exception as e:
+            import structlog
+            log = structlog.get_logger("talemate.llm_providers.base")
+            log.error(f"LiteLLM get_max_tokens failed for {full_model_name}: {e}")
+            return None
+    
 
 

@@ -163,6 +163,8 @@ async def websocket_endpoint(websocket):
                         await handler.configure_clients(data.get("clients"))
                     elif action_type == "configure_agents":
                         await handler.configure_agents(data.get("agents"))
+                    elif action_type == "update_model_config_context_size":
+                        await handler.update_model_config_context_size(data.get("config"))
                     elif action_type == "request_client_status":
                         await handler.request_client_status()
                     elif action_type == "delete_message":

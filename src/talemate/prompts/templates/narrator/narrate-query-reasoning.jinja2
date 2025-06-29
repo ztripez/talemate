@@ -1,0 +1,54 @@
+{% set extra_context_content -%}
+{% include "extra-context.jinja2" %}
+{% endset %}
+{{ extra_context_content }}
+{% set extra_context_tokens = count_tokens(extra_context_content) %}
+{% set budget=max_tokens-300-extra_context_tokens %}
+{% with budget=budget %}{% include "scene-context.jinja2" %}{% endwith %}
+<|SECTION:TASK|>
+{% set last_message = scene.last_message_of_type(["character", "narrator"]) %}
+{% if query.endswith("?") -%}
+Write a narrative response to: "{{ query }}"
+{% else -%}
+{{ query }}
+{% endif %}
+
+Provide narrative content about the current scene or world without advancing the plot.
+
+Use the established context to inform your writing, anchoring it to the final line in the scene.
+
+{% if last_message %}
+``` the final line in the scene
+{{ last_message }}
+```
+{% endif -%}
+
+Write information that maintains continuity with everything up to and including the final line.
+
+Write as an omniscient narrator with deep knowledge of the story world.
+Write 1-2 sentences of concise narration fitting the scene's context.
+Focus on descriptive prose and implied experiences.
+Use a unique narrative voice.
+
+{% if query.endswith("?") -%}Provide narrative information{% else %}Write narrative content{% endif %} confidently and decisively, without progressing the story.
+
+{% if agent_context_state["director__narrator_guidance"] -%}
+{{ agent_context_state["director__narrator_guidance"] }}
+{% elif agent_context_state["narrator__writing_style"] %}
+{{ agent_context_state["narrator__writing_style"].instructions }}
+{% else %}
+Maintain an informal, conversational tone.
+{% endif %}
+
+{% if agent_context_state["summarizer__context_investigation"] %}Information that may be relevant to your writing:
+{{ agent_context_state["summarizer__context_investigation"] }}
+{% endif %}
+
+{% if extra_context -%}Relevant information: {{ extra_context }}{% endif %}
+
+{{ extra_instructions }}
+
+{% if query.endswith("?") -%}Narrative request{% else %}Instruction{% endif %}: {{query}}
+{% include "regenerate-context.jinja2" -%}
+<|CLOSE_SECTION|>
+Write the narrative content directly:

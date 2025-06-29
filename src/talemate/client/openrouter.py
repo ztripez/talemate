@@ -4,7 +4,8 @@ import httpx
 import asyncio
 import json
 import litellm
-from litellm import acompletion, ModelResponse
+from litellm import acompletion
+from litellm.utils import supports_reasoning
 from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
@@ -79,7 +80,7 @@ handlers["config_saved"].connect(fetch_models_sync)
 handlers["talemate_started"].connect(fetch_models_sync)
 
 class Defaults(CommonDefaults, pydantic.BaseModel):
-    max_token_length: int = 16384
+    max_token_length: int = 32768
     model: str = DEFAULT_MODEL
 
 
@@ -104,40 +105,30 @@ class OpenRouterClient(ClientBase):
         defaults: Defaults = Defaults()
 
     def __init__(self, model=None, **kwargs):
-        # Handle model_config initialization
-        model_config = kwargs.get('model_config')
-        if model_config:
-            # Extract model ID from config (e.g., "openrouter/anthropic/claude-3-opus" -> "anthropic/claude-3-opus")
-            model_id = model_config.get('model_id', '')
-            if model_id.startswith('openrouter/'):
-                model_id = model_id[len('openrouter/'):]
-            
-            self.model_name = model_id or model_config.get('model_name', DEFAULT_MODEL)
-            
-            # OpenRouter uses the provider's API key
-            provider_config = load_config(as_model=True)
-            kwargs['api_key'] = model_config.get('api_key') or provider_config.openrouter.api_key
-        else:
-            self.model_name = model or DEFAULT_MODEL
-            
+        # Initialize OpenRouter-specific attributes before calling super().__init__
+        # because super().__init__ will call set_client() which needs these attributes
         self.api_key_status = None
-        self.config = load_config()
         self._models_fetched = False
+        
         super().__init__(**kwargs)
-
+        
+        # Initialize config from load_config
+        self.config = load_config()
         handlers["config_saved"].connect(self.on_config_saved)
 
     @property
     def can_be_coerced(self) -> bool:
         return True
 
-    @property
+    @property   
     def openrouter_api_key(self):
         # First check if api_key was set during initialization (from model config)
         if hasattr(self, 'api_key') and self.api_key:
             return self.api_key
-        # Otherwise fall back to config file
-        return self.config.get("openrouter", {}).get("api_key")
+        # Otherwise fall back to config file if it exists
+        if hasattr(self, 'config') and self.config:
+            return self.config.get("openrouter", {}).get("api_key")
+        return None
 
     @property
     def supported_parameters(self):
@@ -198,7 +189,7 @@ class OpenRouterClient(ClientBase):
     def set_client(self, max_token_length: int = None):
         if not self.openrouter_api_key:
             log.error("No OpenRouter API key set")
-            if self.api_key_status:
+            if hasattr(self, 'api_key_status') and self.api_key_status:
                 self.api_key_status = False
                 emit("request_client_status")
                 emit("request_agent_status")
@@ -213,13 +204,16 @@ class OpenRouterClient(ClientBase):
         # Configure LiteLLM for OpenRouter
         if self.openrouter_api_key:
             litellm.api_key = self.openrouter_api_key
-        litellm.api_base = "https://openrouter.ai/api/v1"
+        litellm.api_base = self.openrouter_api_key
         
-        # Set max token length (default to 16k if not specified)
-        self.max_token_length = max_token_length or 16384
+        # Set max token length (default to 32k if not specified)
+        if max_token_length is not None:
+            self.max_token_length = max_token_length
+        else:
+            self.max_token_length = 32768
 
-        if not self.api_key_status:
-            if self.api_key_status is False:
+        if not hasattr(self, 'api_key_status') or not self.api_key_status:
+            if hasattr(self, 'api_key_status') and self.api_key_status is False:
                 emit("request_client_status")
                 emit("request_agent_status")
             self.api_key_status = True
@@ -293,39 +287,93 @@ class OpenRouterClient(ClientBase):
             litellm_params = {
                 "model": f"openrouter/{self.model_name}",
                 "messages": messages,
-                "system": system_message,
-                "stream": True,
+                "stream": False,  # Disable streaming for now to fix the issue
                 **parameters,
             }
+            
+            # For reasoning models, request reasoning content
+            if supports_reasoning(f"openrouter/{self.model_name}"):
+                litellm_params["include_reasoning"] = True
+                log.info("OpenRouter detected reasoning model, requesting reasoning content")
+            
+            # Add system message if provided
+            if system_message:
+                litellm_params["messages"] = [
+                    {"role": "system", "content": system_message}
+                ] + messages
 
             # Set API key and base URL if needed
             if self.openrouter_api_key:
                 litellm_params["api_key"] = self.openrouter_api_key
             litellm_params["api_base"] = "https://openrouter.ai/api/v1"
 
-            stream = await acompletion(**litellm_params)
+            log.info("OpenRouter making API call", model=litellm_params["model"], messages_count=len(litellm_params["messages"]))
+            response = await acompletion(**litellm_params)
             
-            response = ""
+            log.info("OpenRouter API response received", response_type=type(response).__name__, has_choices=hasattr(response, 'choices'))
             
-            # Iterate over streamed chunks
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta and getattr(delta, "content", None):
-                    content_piece = delta.content
-                    response += content_piece
-                    # Incrementally track token usage
-                    self.update_request_tokens(self.count_tokens(content_piece))
-            
-            # Extract token usage if available
-            if hasattr(stream, 'usage') and stream.usage:
-                self._returned_prompt_tokens = getattr(stream.usage, 'prompt_tokens', None)
-                self._returned_response_tokens = getattr(stream.usage, 'completion_tokens', None)
+            # Extract the response text
+            if hasattr(response, 'choices') and response.choices and len(response.choices) > 0:
+                choice = response.choices[0]
+                log.info("OpenRouter choice details", choice_type=type(choice).__name__, has_message=hasattr(choice, 'message'), has_text=hasattr(choice, 'text'))
+                
+                if hasattr(choice, 'message') and choice.message:
+                    content = choice.message.content or ""
+                    log.info("OpenRouter extracted from message.content", content_length=len(content), content_preview=content[:100] if content else "EMPTY")
+                    
+                    # For reasoning models, check if LiteLLM provided reasoning content separately
+                    if hasattr(choice, 'message') and hasattr(choice.message, 'reasoning_content') and choice.message.reasoning_content:
+                        reasoning_content = choice.message.reasoning_content
+                        log.info("OpenRouter reasoning model response with reasoning content",
+                                model=self.model_name,
+                                has_reasoning=True,
+                                content_length=len(content),
+                                reasoning_length=len(reasoning_content))
+                        
+                        # If main content is empty but we have reasoning content, extract final answer from reasoning
+                        if not content and reasoning_content:
+                            # For DeepSeek R1, the reasoning content contains both thinking and final answer
+                            # Try to extract the final answer after the reasoning
+                            final_answer = self._extract_final_answer_from_reasoning(reasoning_content)
+                            if final_answer:
+                                content = final_answer
+                                log.info("OpenRouter extracted final answer from reasoning", content_length=len(content))
+                            else:
+                                # Fallback: use the reasoning content as-is
+                                content = reasoning_content
+                                log.info("OpenRouter using full reasoning content as fallback", content_length=len(content))
+                        elif content and reasoning_content:
+                            # Both content and reasoning are present - this is the ideal case
+                            # Log that we have both but use the main content as intended
+                            log.info("OpenRouter reasoning model returned both content and reasoning",
+                                    content_length=len(content),
+                                    reasoning_length=len(reasoning_content))
+                    
+                    # Check for other potential content fields as fallback
+                    if not content and hasattr(choice.message, 'text'):
+                        alt_content = choice.message.text or ""
+                        log.info("OpenRouter message.text found", content_length=len(alt_content), content_preview=alt_content[:100] if alt_content else "EMPTY")
+                        if alt_content:
+                            content = alt_content
+                    
+                elif hasattr(choice, 'text'):
+                    content = choice.text or ""
+                    log.info("OpenRouter extracted from choice.text", content_length=len(content), content_preview=content[:100] if content else "EMPTY")
+                else:
+                    content = ""
+                    log.warning("OpenRouter choice has no message or text attribute", choice_attrs=dir(choice))
+                    
+                # Extract token usage if available
+                if hasattr(response, 'usage') and response.usage:
+                    self._returned_prompt_tokens = getattr(response.usage, 'prompt_tokens', None)
+                    self._returned_response_tokens = getattr(response.usage, 'completion_tokens', None)
+                    log.info("OpenRouter token usage", prompt_tokens=self._returned_prompt_tokens, completion_tokens=self._returned_response_tokens)
 
-            log.debug("generated response", response=response)
-
-            return response
+                log.info("OpenRouter final content", content_length=len(content), is_empty=not content.strip())
+                return content
+            else:
+                log.warning("OpenRouter response has no choices or empty choices", has_choices=hasattr(response, 'choices'), choices_length=len(response.choices) if hasattr(response, 'choices') and response.choices else 0)
+                return ""
         except AuthenticationError as e:
             self.log.error("generate error - authentication", e=e)
             emit("status", message="OpenRouter API: Authentication Failed", status="error")
@@ -350,3 +398,103 @@ class OpenRouterClient(ClientBase):
             self.log.error("generate error", e=e)
             emit("status", message="Error during generation (check logs)", status="error")
             return ""
+
+    def _extract_final_answer_from_reasoning(self, reasoning_content: str) -> str:
+        """
+        Extract the final answer from reasoning content for reasoning models like DeepSeek R1.
+        
+        DeepSeek R1 and similar reasoning models often structure their reasoning content with
+        the thinking process followed by a final answer section.
+        """
+        if not reasoning_content:
+            return ""
+        
+        # Common patterns for final answer extraction
+        final_answer_markers = [
+            "Final answer:",
+            "Answer:",
+            "Conclusion:",
+            "Therefore:",
+            "In conclusion:",
+            "So the answer is:",
+            "The answer is:",
+            "My final answer is:",
+            "\n\n---\n\n",  # Some models use separator lines
+            "\n\nFinal response:",
+            "\n\nResponse:",
+        ]
+        
+        # Try to find a final answer marker and extract content after it
+        for marker in final_answer_markers:
+            if marker.lower() in reasoning_content.lower():
+                # Find the marker (case insensitive)
+                marker_pos = reasoning_content.lower().find(marker.lower())
+                if marker_pos != -1:
+                    # Extract everything after the marker
+                    final_answer = reasoning_content[marker_pos + len(marker):].strip()
+                    if final_answer:
+                        log.info("OpenRouter extracted final answer using marker", marker=marker, answer_length=len(final_answer))
+                        return final_answer
+        
+        # If no clear marker found, try to extract the last paragraph/section
+        # that looks like a final answer (not thinking process)
+        lines = reasoning_content.strip().split('\n')
+        
+        # Look for the last substantial paragraph that doesn't contain thinking indicators
+        thinking_indicators = [
+            "let me think",
+            "i need to",
+            "first,",
+            "second,",
+            "next,",
+            "then,",
+            "hmm",
+            "wait",
+            "actually",
+            "let's see",
+            "i should",
+            "maybe",
+            "perhaps",
+            "it seems",
+            "i think",
+            "considering",
+            "looking at",
+        ]
+        
+        # Start from the end and work backwards to find a good final answer
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
+            if not line:
+                continue
+                
+            # Skip lines that look like thinking process
+            is_thinking = any(indicator in line.lower() for indicator in thinking_indicators)
+            if is_thinking:
+                continue
+                
+            # If we find a substantial line that doesn't look like thinking, use it and everything after
+            if len(line) > 20:  # Substantial content
+                final_section = '\n'.join(lines[i:]).strip()
+                if final_section:
+                    log.info("OpenRouter extracted final answer from last section", answer_length=len(final_section))
+                    return final_section
+        
+        # If all else fails, return the last 30% of the content as it's likely the conclusion
+        # Increased from 20% to 30% to avoid cutting off mid-sentence
+        content_length = len(reasoning_content)
+        if content_length > 100:
+            # Try 30% first
+            final_portion = reasoning_content[int(content_length * 0.7):].strip()
+            if final_portion:
+                log.info("OpenRouter extracted final answer from last 30% of content", answer_length=len(final_portion))
+                return final_portion
+            
+            # If that's too small, try 40%
+            final_portion = reasoning_content[int(content_length * 0.6):].strip()
+            if final_portion:
+                log.info("OpenRouter extracted final answer from last 40% of content", answer_length=len(final_portion))
+                return final_portion
+        
+        # No clear final answer found
+        log.warning("OpenRouter could not extract clear final answer from reasoning content")
+        return ""

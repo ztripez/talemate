@@ -112,81 +112,39 @@ class WebsocketHandler(Receiver):
                 plugin.disconnect()
 
     async def connect_llm_clients(self):
-        # First, create clients from saved model configs
+        # Clear any existing legacy client configs to avoid conflicts
+        legacy_clients = self.llm_clients.copy()
+        self.llm_clients = {}
+        
+        # First, create clients from saved model configs using ModelPreset
         config = load_config(as_model=True)
+        from talemate.model_preset import ModelPreset
+        
         for config_id, model_config_data in config.model_configs.items():
             try:
-                # Extract provider info from the nested structure
-                provider_info = model_config_data.get("provider", {})
-                provider_name = provider_info.get("provider_name", "")
-                
-                # Extract model info
-                model_info = model_config_data.get("model", {})
-                model_name = model_info.get("name", "")
-                full_name = model_info.get("full_name", "")
+                # Create ModelPreset from model config
+                model_preset = ModelPreset.from_model_config(config_id, model_config_data)
                 
                 # Create a user-friendly client name
-                # Use model name if available, otherwise fall back to config_id
-                if model_name:
-                    client_name = f"{provider_name} - {model_name}"
+                if model_preset.model_config.model_name:
+                    client_name = f"{model_preset.model_config.provider_name} - {model_preset.model_config.model_name}"
                 else:
-                    client_name = f"{provider_name} - {config_id}"
+                    client_name = f"{model_preset.model_config.provider_name} - {config_id}"
                 
-                # Map provider to client type
-                client_type_map = {
-                    "OpenRouter": "openrouter",
-                    "OpenAI": "openai",
-                    "Anthropic": "anthropic",
-                    "Groq": "groq",
-                    "Google": "google",
-                    "Mistral": "mistral",
-                    "Deepseek": "deepseek",
-                    "Cohere": "cohere",
-                    "KoboldCpp": "koboldcpp",
-                    "Ollama": "ollama",
-                    "LM Studio": "lmstudio",
-                    "Text Generation WebUI": "textgenwebui",
-                    "TabbyAPI": "tabbyapi",
-                    "OpenAI Compatible": "openai_compat",
-                }
-                
-                client_type = client_type_map.get(provider_name)
-                
-                if not client_type:
-                    log.warning(f"Unknown provider type: {provider_name}")
+                # Get client dictionary from ModelPreset
+                client_dict = model_preset.to_client_dict(config, client_name)
+                if not client_dict:
+                    log.warning(f"Failed to create client dict for config: {config_id}")
                     continue
                 
-                # Build model config for client initialization
-                client_model_config = {
-                    "id": config_id,
-                    "model_name": model_name,
-                    "model_id": full_name,
-                    "provider": provider_name,
-                    "max_tokens": model_config_data.get("parameters", {}).get("max_tokens", 4096),
-                    "capabilities": model_info.get("capabilities", {}),
-                }
-                
-                # Create client from model config using the friendly name
-                client = instance.get_client(
-                    name=client_name,
-                    type=client_type,
-                    model_config=client_model_config,
-                    enabled=True
-                )
-                
-                # Use config_id as key but store the friendly name
-                self.llm_clients[config_id] = {
-                    "client": client,
-                    "name": client_name,
-                    "type": client_type,
-                    "enabled": True,
-                }
+                # Use client_name as key to match client status emissions
+                self.llm_clients[client_name] = client_dict
                 
                 log.info(
-                    "Created client from model config",
+                    "Created client from ModelPreset",
                     client_name=client_name,
-                    client_type=client_type,
-                    model=model_name,
+                    client_type=client_dict["type"],
+                    model=model_preset.model_config.model_name,
                 )
             except Exception as e:
                 log.error(f"Error creating client from model config {config_id}: {e}")
@@ -196,15 +154,19 @@ class WebsocketHandler(Receiver):
         
         # Then handle any legacy manual clients if they still exist
         client = None
-        for client_name, client_config in self.llm_clients.items():
-            if "client" in client_config:
-                # Client already created from model config
+        for client_name, client_config in legacy_clients.items():
+            # Skip if this is already a model config client (has nested structure)
+            if isinstance(client_config, dict) and ("provider" in client_config or "model" in client_config):
                 continue
                 
             try:
-                client = self.llm_clients[client_name]["client"] = instance.get_client(
-                    **client_config
-                )
+                client = instance.get_client(**client_config)
+                self.llm_clients[client_name] = {
+                    "client": client,
+                    "name": client_name,
+                    "type": client.client_type,
+                    "enabled": client_config.get("enabled", True),
+                }
             except TypeError as e:
                 log.error("Error connecting to client", client_name=client_name, e=e)
                 continue
@@ -469,6 +431,62 @@ class WebsocketHandler(Receiver):
 
         instance.emit_agents_status()
 
+    async def update_model_config_context_size(self, config_data):
+        """Update max_context_size for a specific model config"""
+        config_id = config_data.get("config_id")
+        max_context_size = config_data.get("max_context_size")
+        
+        if not config_id or max_context_size is None:
+            log.error("Missing config_id or max_context_size", config_data=config_data)
+            self.queue_put({
+                "type": "error",
+                "message": "Missing config_id or max_context_size",
+            })
+            return
+        
+        try:
+            # Check if model config exists
+            model_configs = self.config.get("model_configs", {})
+            if config_id not in model_configs:
+                log.error("Model configuration not found", config_id=config_id)
+                self.queue_put({
+                    "type": "error", 
+                    "message": "Model configuration not found",
+                })
+                return
+            
+            # Update the max_context_size in the model config
+            model_config = model_configs[config_id]
+            
+            # Update both in model info and parameters for compatibility
+            if "model" not in model_config:
+                model_config["model"] = {}
+            model_config["model"]["max_context_size"] = max_context_size
+            
+            if "parameters" not in model_config:
+                model_config["parameters"] = {}
+            model_config["parameters"]["max_context_size"] = max_context_size
+            
+            # Save config
+            save_config(self.config)
+            
+            log.info("Updated model config context size", 
+                    config_id=config_id, max_context_size=max_context_size)
+            
+            # Send success response
+            self.queue_put({
+                "type": "model_config_context_size_updated",
+                "config_id": config_id,
+                "max_context_size": max_context_size,
+            })
+            
+        except Exception as e:
+            log.error("Failed to update model config context size", error=str(e), config_id=config_id)
+            self.queue_put({
+                "type": "error",
+                "message": f"Failed to update model config context size: {str(e)}",
+            })
+
     def handle(self, emission: Emission):
         called = super().handle(emission)
 
@@ -660,6 +678,12 @@ class WebsocketHandler(Receiver):
 
     def handle_client_status(self, emission: Emission):
         client = instance.get_client(emission.id)
+        max_tokens = client.max_token_length if client else 8192
+        
+        # Only log when client is not found or on first connection
+        if not client:
+            log.warning(f"No client found for emission ID: {emission.id}")
+            
         self.queue_put(
             {
                 "type": "client_status",
@@ -668,7 +692,7 @@ class WebsocketHandler(Receiver):
                 "name": emission.id,
                 "status": emission.status,
                 "data": emission.data,
-                "max_token_length": client.max_token_length if client else 8192,
+                "max_token_length": max_tokens,
                 "api_url": getattr(client, "api_url", None) if client else None,
                 "api_url": getattr(client, "api_url", None) if client else None,
                 "api_key": getattr(client, "api_key", None) if client else None,

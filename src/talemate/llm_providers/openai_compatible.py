@@ -13,6 +13,10 @@ class OpenAICompatibleProvider(BaseProvider):
         return "openai_compatible"
     
     @classmethod
+    def get_old_client_type(cls) -> str:
+        return "openai_compat"
+    
+    @classmethod
     def get_settings_schema(cls) -> List[ProviderSetting]:
         return [
             ProviderSetting(

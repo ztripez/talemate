@@ -15,6 +15,10 @@ class OobaboogaProvider(BaseProvider):
         return "oobabooga"
     
     @classmethod
+    def get_old_client_type(cls) -> str:
+        return "textgenwebui"
+    
+    @classmethod
     def is_multi_instance(cls) -> bool:
         """Oobabooga supports multiple instances (different servers)"""
         return True

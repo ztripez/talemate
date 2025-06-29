@@ -78,7 +78,7 @@
                 :min="1024"
                 :max="128000"
                 :step="1024"
-                @update:modelValue="saveClientDelayed(client)"
+                @update:modelValue="updateClientMaxTokenLength(client, $event)"
                 @click.stop
                 density="compact"
               ></v-slider>
@@ -276,6 +276,26 @@ export default {
     },
     propagateError(error) {
       this.$emit('error', error);
+    },
+
+    updateClientMaxTokenLength(client, newValue) {
+      client.max_token_length = newValue;
+      this.saveClientDelayed(client);
+      
+      // Also update the corresponding model config if this client comes from one
+      if (client.model_config_id) {
+        this.updateModelConfigContextSize(client.model_config_id, newValue);
+      }
+    },
+
+    updateModelConfigContextSize(configId, maxContextSize) {
+      this.getWebsocket().send(JSON.stringify({
+        type: 'update_model_config_context_size',
+        config: {
+          config_id: configId,
+          max_context_size: maxContextSize
+        }
+      }));
     },
 
     saveClientDelayed(client) {
