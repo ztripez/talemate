@@ -1,6 +1,6 @@
 <template>
-  <v-list-subheader class="text-uppercase"><v-icon>mdi-network-outline</v-icon>
-    Clients
+  <v-list-subheader class="text-uppercase"><v-icon>mdi-tune-variant</v-icon>
+    Model Presets
     <v-btn @click="hideDisabled = !hideDisabled" size="x-small" v-if="numDisabledClients > 0">
       <template v-slot:prepend>
         <v-icon>{{ hideDisabled ? 'mdi-eye' : 'mdi-eye-off' }}</v-icon>
@@ -41,10 +41,10 @@
             </v-list-item-subtitle>
             <v-list-item-title class="text-caption">
               <div class="d-flex flex-wrap align-center">
-                <!-- client type -->
-                <v-chip label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-server-outline">{{ client.type }}</v-chip>
-                <!-- max token length -->
-                <v-chip label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-text-box">{{ client.max_token_length }}</v-chip>
+                <!-- provider name -->
+                <v-chip label size="x-small" color="primary" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-cloud-outline">{{ client.data?.provider_name || client.type }}</v-chip>
+                <!-- max context size -->
+                <v-chip label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-text-box">{{ client.data?.max_context_size || client.max_token_length }}</v-chip>
                 <!-- embeddings -->
                 <v-chip v-if="client.embeddings_model_name" label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-cube-unfolded">{{ client.embeddings_model_name }}</v-chip>
                 <!-- override base url -->
@@ -93,9 +93,9 @@
               </v-tooltip>
   
               <!-- coercion status -->
-              <v-tooltip :text="'Coercion active: ' + client.double_coercion" v-if="client.double_coercion" max-width="200">
+              <v-tooltip :text="(client.data?.double_coercion || client.double_coercion) ? ('Coercion active: ' + (client.data?.double_coercion || client.double_coercion)) : 'No coercion set'" max-width="200">
                 <template v-slot:activator="{ props }">
-                  <v-icon x-size="14" class="mr-1" v-bind="props" color="primary">mdi-account-lock-open</v-icon>
+                  <v-icon x-size="14" class="mr-1" v-bind="props" :color="(client.data?.double_coercion || client.double_coercion) ? 'primary' : 'grey'">mdi-account-lock-open</v-icon>
                 </template>
               </v-tooltip>
   
@@ -143,8 +143,8 @@
       @error="propagateError" 
       @update:dialog="updateDialog">
     </ClientModal>
-    <v-alert type="warning" variant="tonal" v-if="state.clients.length === 0">You have no LLM clients configured. Add one.</v-alert>
-    <v-btn @click="openModal" elevation="0" prepend-icon="mdi-plus-box">Add client</v-btn>
+    <v-alert type="warning" variant="tonal" v-if="state.clients.length === 0">You have no model presets configured. Add one.</v-alert>
+    <v-btn @click="openModal" elevation="0" prepend-icon="mdi-plus-box">Add Model Preset</v-btn>
   </div>
 </template>
   
@@ -230,6 +230,7 @@ export default {
   },
   emits: [
     'clients-updated',
+    'model-presets-updated',
     'client-assigned',
     'open-app-config',
     'save',
@@ -280,11 +281,17 @@ export default {
 
     updateClientMaxTokenLength(client, newValue) {
       client.max_token_length = newValue;
+      
+      // For ModelPresets, also update the data field
+      if (client.config_id && client.data) {
+        client.data.max_context_size = newValue;
+      }
+      
       this.saveClientDelayed(client);
       
       // Also update the corresponding model config if this client comes from one
-      if (client.model_config_id) {
-        this.updateModelConfigContextSize(client.model_config_id, newValue);
+      if (client.model_config_id || client.config_id) {
+        this.updateModelConfigContextSize(client.model_config_id || client.config_id, newValue);
       }
     },
 
@@ -317,7 +324,13 @@ export default {
         this.state.clients[index] = client;
       }
       this.state.dialog = false; // Close the dialog after saving the client
-      this.$emit('clients-updated', this.state.clients);
+      
+      // Emit the appropriate event based on whether this is a ModelPreset or legacy client
+      if (client.config_id) {
+        this.$emit('model-presets-updated', this.state.clients);
+      } else {
+        this.$emit('clients-updated', this.state.clients);
+      }
     },
     editClient(index) {
       this.state.currentClient = { ...this.state.clients[index] };
@@ -437,6 +450,72 @@ export default {
           }
 
           // sort the clients by name
+          this.state.clients.sort((a, b) => (a.name > b.name) ? 1 : -1);
+        }
+
+        return;
+      }
+
+      // Handle model_preset_status message type
+      if (data.type === 'model_preset_status') {
+        
+        if(this.clientImmutable[data.name]) {
+          console.log("Ignoring model_preset_status message for immutable preset", data.name)
+          delete this.clientImmutable[data.name]
+          return;
+        }
+
+        // Find the preset with the given config_id
+        const client = this.state.clients.find(client => client.name === data.name || client.config_id === data.name);
+
+        if (client && !client.dirty) {
+          // Update the model preset information
+          client.name = data.name;
+          client.config_id = data.name;
+          client.model_name = data.model_name;
+          client.model = data.model_name;
+          client.type = data.message; // provider name
+          client.status = data.status;
+          client.enabled = data.data.enabled;
+          client.max_token_length = data.data.max_context_size || 8192;
+          client.double_coercion = data.data.double_coercion;
+          client.system_prompts = data.data.system_prompts || {};
+          client.data = {
+            ...data.data,
+            // For backward compatibility with existing template checks
+            meta: data.data.meta || { extra_fields: {}, defaults: {} },
+            has_prompt_template: true, // ModelPresets always have templates
+            enabled: data.data.enabled,
+          };
+          client.preset_group = "";
+          client.request_information = null;
+
+        } else if(!client) {
+          console.log("Adding new model preset", data);
+
+          this.state.clients.push({ 
+            name: data.name,
+            config_id: data.name,
+            model_name: data.model_name, 
+            model: data.model_name,
+            type: data.message, // provider name
+            status: data.status,
+            enabled: data.data.enabled,
+            max_token_length: data.data.max_context_size || 8192,
+            double_coercion: data.data.double_coercion,
+            system_prompts: data.data.system_prompts || {},
+            data: {
+              ...data.data,
+              // For backward compatibility with existing template checks
+              meta: data.data.meta || { extra_fields: {}, defaults: {} },
+              has_prompt_template: true, // ModelPresets always have templates
+              enabled: data.data.enabled,
+            },
+            preset_group: "",
+            request_information: null,
+          });
+
+          // sort the presets by name
           this.state.clients.sort((a, b) => (a.name > b.name) ? 1 : -1);
         }
 

@@ -168,36 +168,44 @@ class GenerateChoicesMixin:
         await talemate.emit.async_signals.get("agent.director.generate_choices.before_generate").send(emission)
         await talemate.emit.async_signals.get("agent.director.generate_choices.inject_instructions").send(emission)
         
-        response = await Prompt.request(
-            "director.generate-choices",
-            self.client,
-            "direction_long",
-            vars={
-                "max_tokens": self.client.max_token_length,
-                "scene": self.scene,
-                "character": character,
-                "num_choices": self.generate_choices_num_choices,
-                "instructions": instructions or self.generate_choices_instructions,
-                "dynamic_instructions": emission.dynamic_instructions if emission else None,
-            },
-        )
-
+        # Try clean prompt system first
         try:
-            choice_text = response.split("ACTIONS:", 1)[1]
-            choices = util.extract_list(choice_text)
-            # strip quotes
-            choices = [choice.strip().strip('"') for choice in choices]
+            from talemate.client.instructor_models import DirectorChoicesResponse
             
-            # limit to num_choices
-            choices = choices[:self.generate_choices_num_choices]
-        
+            response = await self.request_with_instructor(
+                "generate-choices",
+                vars={
+                    "max_tokens": getattr(self.client, 'max_token_length', 1024),
+                    "scene": self.scene,
+                    "character": character,
+                    "num_choices": self.generate_choices_num_choices,
+                    "instructions": instructions or self.generate_choices_instructions,
+                    "dynamic_instructions": emission.dynamic_instructions if emission else None,
+                },
+                response_model=DirectorChoicesResponse,
+                kind="direction_long",
+                max_tokens=getattr(self.client, 'max_token_length', 1024),
+            )
+            
+            # Extract choices from structured response
+            if isinstance(response, DirectorChoicesResponse):
+                choices = response.choices[:self.generate_choices_num_choices]
+                response_text = f"ACTIONS: {choices}"  # For emission compatibility
+            else:
+                # Fallback to text parsing if structured response failed
+                choice_text = response.split("ACTIONS:", 1)[1] if "ACTIONS:" in response else response
+                choices = util.extract_list(choice_text)
+                choices = [choice.strip().strip('"') for choice in choices]
+                choices = choices[:self.generate_choices_num_choices]
+                response_text = response
+            
         except Exception as e:
-            log.error("generate_choices failed", error=str(e), response=response)
+            log.error("generate_choices failed", error=str(e), response=str(response) if 'response' in locals() else "No response")
             return
 
         emit(
             "player_choice",
-            response,
+            response_text,
             data = {
                 "choices": choices,
                 "character": character.name,
@@ -205,7 +213,7 @@ class GenerateChoicesMixin:
             websocket_passthrough=True
         )
         
-        emission.response = response
+        emission.response = response_text
         emission.choices = choices
         await talemate.emit.async_signals.get("agent.director.generate_choices.generated").send(emission)
         

@@ -49,18 +49,24 @@ class CreatorAgent(
     ):
         # Use base class constructor for ModelPreset-first pattern
         super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
-        
-        # Actions are already initialized by base class, but we need to re-init for CreatorAgent specifics
-        self.actions = CreatorAgent.init_actions()
 
     @set_processing
     async def generate_title(self, text: str):
-        title = await Prompt.request(
-            f"creator.generate-title",
-            self.client,
-            "create_short",
+        from talemate.client.instructor_models import CreatorTitleResponse
+        
+        # Try clean prompt system first
+        response = await self.request_with_instructor(
+            "generate-title",
             vars={
                 "text": text,
             },
+            response_model=CreatorTitleResponse,
+            kind="create_short",
+            max_tokens=getattr(self.client, 'max_token_length', 512),
         )
-        return title
+        
+        # Extract title from structured response
+        if isinstance(response, CreatorTitleResponse):
+            return response.title
+        else:
+            return response

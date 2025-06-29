@@ -270,21 +270,32 @@ class GuideSceneMixin:
         """
         Guides the actor based on the scene analysis.
         """
+        from talemate.client.instructor_models import DirectorGuidanceResponse
         
         log.debug("director.guide_actor_off_of_scene_analysis", analysis=analysis, character=character)
-        response = await Prompt.request(
-            "director.guide-conversation",
-            self.client,
-            f"direction_{response_length}",
+        
+        # Try clean prompt system first
+        response = await self.request_with_instructor(
+            "guide-conversation",
             vars={
                 "analysis": analysis,
                 "scene": self.scene,
                 "character": character,
                 "response_length": response_length,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": getattr(self.client, 'max_token_length', 512),
             },
+            response_model=DirectorGuidanceResponse,
+            kind=f"direction_{response_length}",
+            max_tokens=getattr(self.client, 'max_token_length', 512),
         )
-        return strip_partial_sentences(response).strip()
+        
+        # Extract guidance from structured response
+        if isinstance(response, DirectorGuidanceResponse):
+            guidance = response.guidance
+        else:
+            guidance = response
+            
+        return strip_partial_sentences(guidance).strip()
     
     @set_processing
     async def guide_narrator_off_of_scene_analysis(
@@ -295,18 +306,28 @@ class GuideSceneMixin:
         """
         Guides the narrator based on the scene analysis.
         """
+        from talemate.client.instructor_models import DirectorGuidanceResponse
         
         log.debug("director.guide_narrator_off_of_scene_analysis", analysis=analysis)
         
-        response = await Prompt.request(
-            "director.guide-narration",
-            self.client,
-            f"direction_{response_length}",
+        # Try clean prompt system first
+        response = await self.request_with_instructor(
+            "guide-narration",
             vars={
                 "analysis": analysis,
                 "scene": self.scene,
                 "response_length": response_length,
-                "max_tokens": self.client.max_token_length,
+                "max_tokens": getattr(self.client, 'max_token_length', 512),
             },
+            response_model=DirectorGuidanceResponse,
+            kind=f"direction_{response_length}",
+            max_tokens=getattr(self.client, 'max_token_length', 512),
         )
-        return strip_partial_sentences(response).strip()
+        
+        # Extract guidance from structured response
+        if isinstance(response, DirectorGuidanceResponse):
+            guidance = response.guidance
+        else:
+            guidance = response
+            
+        return strip_partial_sentences(guidance).strip()

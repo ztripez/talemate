@@ -65,6 +65,8 @@ class ModelPreset:
     Now serves as the primary interface for agent LLM access.
     """
     model_config: ModelConfig
+    system_prompts: Dict[str, str] = field(default_factory=dict)  # Agent-specific system prompts
+    double_coercion: str = field(default="")  # Prefill/coercion text
     
     def __post_init__(self):
         self._provider_instance = None
@@ -271,6 +273,32 @@ class ModelPreset:
         """Quick access to config ID"""
         return self.model_config.config_id
     
+    def get_system_message(self, agent_type: str, decensor: bool = False):
+        """Get agent-specific system prompt with decensor support"""
+        # Build key for system prompt lookup
+        key = f"{agent_type}_decensor" if decensor else agent_type
+        
+        # Check ModelPreset-specific system prompts first
+        if key in self.system_prompts:
+            return self.system_prompts[key]
+        
+        # Fall back to global system prompts
+        from talemate.client.system_prompts import render_prompt
+        return render_prompt(agent_type, decensor=decensor)
+    
+    def set_system_prompt(self, agent_type: str, prompt: str, decensor: bool = False):
+        """Set agent-specific system prompt"""
+        key = f"{agent_type}_decensor" if decensor else agent_type
+        self.system_prompts[key] = prompt
+    
+    def get_coercion_text(self):
+        """Get prefill/coercion text"""
+        return self.double_coercion
+    
+    def set_coercion_text(self, coercion: str):
+        """Set prefill/coercion text"""
+        self.double_coercion = coercion
+    
     async def request_clean(self, uid: str, vars: dict, response_model=None, **kwargs):
         """Request using clean prompt system with instructor for structured output"""
         from talemate.llm_providers.prompt_handler import CleanPrompt
@@ -279,8 +307,17 @@ class ModelPreset:
         if not provider:
             raise RuntimeError("No provider available")
             
-        # Parse UID
+        # Parse UID to get agent type
         agent_type, prompt_name = uid.split(".", 1) if "." in uid else ("", uid)
+        
+        # Get agent-specific system message from ModelPreset configuration
+        decensor = kwargs.get('decensor', False)
+        system_message = self.get_system_message(agent_type, decensor=decensor)
+        
+        # Add system message to template vars
+        vars = vars.copy()  # Don't modify original vars
+        vars['system_message'] = system_message
+        vars['agent_type'] = agent_type
         
         # Create clean prompt
         prompt = CleanPrompt(
@@ -293,22 +330,40 @@ class ModelPreset:
         # Render prompt text
         prompt_text = prompt.render()
         
-        # Get system message from client
-        kind = kwargs.get('kind', 'create')
-        client = self.get_client()
-        system_message = ""
-        if client:
-            system_message = client.get_system_message(kind)
+        # Get coercion/prefill text
+        coercion = kwargs.get('coercion_message') or self.get_coercion_text()
         
-        # Build messages for LiteLLM
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": prompt_text}
-        ]
+        # Check if we should use legacy model formatting or modern chat format
+        if self._should_use_legacy_formatting():
+            # Use existing model formatting system for backward compatibility
+            from talemate.client.model_prompts import model_prompt
+            formatted_prompt, _ = model_prompt(
+                self.model_name,
+                system_message,
+                prompt_text,
+                double_coercion=coercion
+            )
+            
+            # For legacy formatting, send as single user message
+            messages = [{"role": "user", "content": formatted_prompt}]
+        else:
+            # Use modern chat message format
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt_text}
+            ]
+            
+            # Add prefilled assistant message if coercion specified
+            if coercion:
+                messages.append({"role": "assistant", "content": coercion})
         
         # Get generation parameters
         temperature = kwargs.get('temperature', 0.7)
         max_tokens = kwargs.get('max_tokens', 512)
+        
+        # Filter out parameters that we're explicitly setting to avoid duplicates
+        filtered_kwargs = {k: v for k, v in kwargs.items() 
+                          if k not in ('temperature', 'max_tokens', 'kind', 'response_model', 'decensor', 'coercion_message')}
         
         # Generate with instructor
         response = await provider.generate(
@@ -317,10 +372,21 @@ class ModelPreset:
             response_model=response_model,
             temperature=temperature,
             max_tokens=max_tokens,
-            **kwargs
+            **filtered_kwargs
         )
         
         return response
+    
+    def _should_use_legacy_formatting(self):
+        """Determine if we should use legacy string formatting vs modern chat format"""
+        # For now, use legacy formatting for local models and modern format for API models
+        # This can be made configurable later
+        provider = self.get_provider()
+        if not provider:
+            return True
+        
+        # Check if provider explicitly supports chat format
+        return not getattr(provider, 'supports_chat_format', True)
     
     def to_client_dict(self, config, name: str | None = None):
         """Convert to the old client dictionary format expected by websocket_server"""

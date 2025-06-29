@@ -129,7 +129,7 @@
         </v-alert>
 
         <v-list>
-          <AIClient ref="aiClient" @save="saveClients" @error="uxErrorHandler" @clients-updated="saveClients" @client-assigned="saveAgents" @open-app-config="openAppConfig" :immutable-config="appConfig"></AIClient>
+          <AIClient ref="aiClient" @save="saveClients" @error="uxErrorHandler" @clients-updated="saveClients" @model-presets-updated="saveModelPresets" @client-assigned="saveAgents" @open-app-config="openAppConfig" :immutable-config="appConfig"></AIClient>
           <v-divider></v-divider>
           <v-list-subheader class="text-uppercase"><v-icon>mdi-transit-connection-variant</v-icon> Agents</v-list-subheader>
           <AIAgent ref="aiAgent" @save="saveAgents" @agents-updated="saveAgents" :agentState="agentState"></AIAgent>
@@ -1084,9 +1084,16 @@ export default {
 
     requestAppConfig() {
       this.websocket.send(JSON.stringify({ type: 'request_app_config' }));
+      this.requestModelPresetStatus();
+    },
+    requestModelPresetStatus() {
+      this.websocket.send(JSON.stringify({ type: 'request_model_preset_status' }));
     },
     saveClients(clients) {
       this.websocket.send(JSON.stringify({ type: 'configure_clients', clients: clients }));
+    },
+    saveModelPresets(modelPresets) {
+      this.websocket.send(JSON.stringify({ type: 'configure_model_presets', model_presets: modelPresets }));
     },
     saveAgents(agents) {
       this.websocket.send(JSON.stringify({ type: 'configure_agents', agents: agents }));

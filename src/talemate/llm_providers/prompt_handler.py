@@ -90,15 +90,17 @@ class CleanPrompt(Prompt):
             "active_agent": self.vars.get('active_agent'),
             "agent_context_state": self.vars.get('agent_context_state', {}),
             
-            # No formatting helpers - these are intentionally removed:
-            # - bot_token
-            # - set_prepared_response*
-            # - set_json_response
-            # - set_data_response
-            # - set_eval_response
-            # - set_question_eval
-            # - disable_dedupe
-            # - llm_can_be_coerced
+            # Disabled formatting functions (no-ops for clean prompts)
+            # These are needed for template compatibility but do nothing
+            "set_prepared_response": lambda x: None,
+            "set_prepared_response_random": lambda x: None,
+            "set_eval_response": lambda x: None,
+            "set_json_response": lambda x: None,
+            "set_data_response": lambda x, cutoff=None: None,
+            "data_format_type": lambda: "json",
+            "set_question_eval": lambda x: None,
+            "disable_dedupe": lambda: None,
+            "llm_can_be_coerced": lambda: False,
         }
         
         # Add template variables
@@ -107,6 +109,10 @@ class CleanPrompt(Prompt):
         # Default decensor to False if not specified
         if "decensor" not in ctx:
             ctx["decensor"] = False
+        
+        # Ensure agent_type is available for system prompt resolution
+        if "agent_type" not in ctx and self.agent_type:
+            ctx["agent_type"] = self.agent_type
         
         # Load template
         if self.template:

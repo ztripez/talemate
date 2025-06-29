@@ -116,14 +116,34 @@ class WebsocketHandler(Receiver):
         legacy_clients = self.llm_clients.copy()
         self.llm_clients = {}
         
+        # Store ModelPresets separately for the new system
+        if not hasattr(self, 'model_presets'):
+            self.model_presets = {}
+        
         # First, create clients from saved model configs using ModelPreset
         config = load_config(as_model=True)
         from talemate.model_preset import ModelPreset
+        from talemate.client.system_prompts import render_prompt
         
         for config_id, model_config_data in config.model_configs.items():
             try:
                 # Create ModelPreset from model config
                 model_preset = ModelPreset.from_model_config(config_id, model_config_data)
+                
+                # Populate with default system prompts so they show up in frontend
+                for agent_type in ['narrator', 'director', 'conversation', 'editor', 'world_state', 'summarize', 'creator', 'visualize']:
+                    # Set normal prompt
+                    normal_prompt = render_prompt(agent_type, decensor=False)
+                    if normal_prompt:
+                        model_preset.set_system_prompt(agent_type, normal_prompt, decensor=False)
+                    
+                    # Set decensor prompt
+                    decensor_prompt = render_prompt(agent_type, decensor=True)
+                    if decensor_prompt:
+                        model_preset.set_system_prompt(agent_type, decensor_prompt, decensor=True)
+                
+                # Store ModelPreset directly
+                self.model_presets[config_id] = model_preset
                 
                 # Create a user-friendly client name
                 if model_preset.model_config.model_name:
@@ -131,7 +151,7 @@ class WebsocketHandler(Receiver):
                 else:
                     client_name = f"{model_preset.model_config.provider_name} - {config_id}"
                 
-                # Get client dictionary from ModelPreset
+                # Get client dictionary from ModelPreset for backward compatibility
                 client_dict = model_preset.to_client_dict(config, client_name)
                 if not client_dict:
                     log.warning(f"Failed to create client dict for config: {config_id}")
@@ -143,7 +163,8 @@ class WebsocketHandler(Receiver):
                 self.llm_clients[config_id] = client_dict
                 
                 log.info(
-                    "Created client from ModelPreset",
+                    "Created ModelPreset and client",
+                    config_id=config_id,
                     client_name=client_name,
                     client_type=client_dict["type"],
                     model=model_preset.model_config.model_name,
@@ -179,7 +200,18 @@ class WebsocketHandler(Receiver):
                 client_type=client.client_type,
             )
 
+        # Send ModelPreset status to frontend
+        await self.send_model_preset_status()
+        
         await self.connect_agents()
+
+    async def send_model_preset_status(self):
+        """Send status for all ModelPresets to frontend"""
+        if not hasattr(self, 'model_presets'):
+            return
+            
+        for config_id, model_preset in self.model_presets.items():
+            self.handle_model_preset_status(config_id, model_preset, "idle")
 
     async def connect_agents(self):
         if not self.llm_clients:
@@ -369,6 +401,54 @@ class WebsocketHandler(Receiver):
         save_config(self.config)
 
         instance.sync_emit_clients_status()
+
+    async def configure_model_presets(self, model_presets_config):
+        """Configure ModelPresets from frontend"""
+        from talemate.model_preset import ModelPreset
+        
+        if not hasattr(self, 'model_presets'):
+            self.model_presets = {}
+        
+        config = load_config(as_model=True)
+        
+        # Update ModelPreset configurations
+        for preset_config in model_presets_config:
+            config_id = preset_config.get('config_id')
+            if not config_id:
+                continue
+                
+            # Get existing ModelPreset or create new one
+            if config_id in self.model_presets:
+                model_preset = self.model_presets[config_id]
+            else:
+                # Create new ModelPreset if it doesn't exist
+                model_config_data = config.model_configs.get(config_id)
+                if not model_config_data:
+                    log.warning(f"No model config found for {config_id}")
+                    continue
+                model_preset = ModelPreset.from_model_config(config_id, model_config_data)
+                self.model_presets[config_id] = model_preset
+            
+            # Update system prompts
+            if 'system_prompts' in preset_config:
+                model_preset.system_prompts = preset_config['system_prompts']
+            
+            # Update coercion text
+            if 'double_coercion' in preset_config:
+                model_preset.double_coercion = preset_config['double_coercion']
+            
+            # Update other configurable fields
+            if 'enabled' in preset_config:
+                # Could add enabled/disabled state to ModelPreset if needed
+                pass
+            
+            log.info(f"Updated ModelPreset configuration: {config_id}")
+        
+        # Send updated status to frontend
+        await self.send_model_preset_status()
+        
+        # Note: We might want to save ModelPreset configs to a separate file
+        # For now, system prompts and coercion are stored in memory
 
     async def configure_agents(self, agents):
         self.agents = {typ: {} for typ in instance.agent_types()}
@@ -719,10 +799,40 @@ class WebsocketHandler(Receiver):
                 "data": emission.data,
                 "max_token_length": max_tokens,
                 "api_url": getattr(client, "api_url", None) if client else None,
-                "api_url": getattr(client, "api_url", None) if client else None,
                 "api_key": getattr(client, "api_key", None) if client else None,
             }
         )
+
+    def handle_model_preset_status(self, config_id: str, model_preset, status: str = "idle"):
+        """Send ModelPreset status to frontend instead of client status"""
+        try:
+            # Build comprehensive ModelPreset data for frontend
+            preset_data = {
+                "config_id": model_preset.config_id,
+                "provider_name": model_preset.provider_name,
+                "model_name": model_preset.model_name,
+                "model_full_name": model_preset.model_config.model_full_name,
+                "provider_instance_id": model_preset.model_config.provider_instance_id,
+                "capabilities": model_preset.model_config.capabilities,
+                "parameters": model_preset.model_config.parameters,
+                "max_context_size": model_preset.model_config.max_context_size,
+                "system_prompts": model_preset.system_prompts,
+                "double_coercion": model_preset.double_coercion,
+                "enabled": True,  # ModelPresets are enabled by default
+            }
+            
+            self.queue_put(
+                {
+                    "type": "model_preset_status",
+                    "message": model_preset.provider_name,
+                    "model_name": model_preset.model_name,
+                    "name": config_id,
+                    "status": status,
+                    "data": preset_data,
+                }
+            )
+        except Exception as e:
+            log.error(f"Error sending model preset status: {e}")
 
     def handle_agent_status(self, emission: Emission):
         self.queue_put(

@@ -161,12 +161,16 @@ async def websocket_endpoint(websocket):
                         handler.request_scenes_list(query)
                     elif action_type == "configure_clients":
                         await handler.configure_clients(data.get("clients"))
+                    elif action_type == "configure_model_presets":
+                        await handler.configure_model_presets(data.get("model_presets"))
                     elif action_type == "configure_agents":
                         await handler.configure_agents(data.get("agents"))
                     elif action_type == "update_model_config_context_size":
                         await handler.update_model_config_context_size(data.get("config"))
                     elif action_type == "request_client_status":
                         await handler.request_client_status()
+                    elif action_type == "request_model_preset_status":
+                        await handler.send_model_preset_status()
                     elif action_type == "delete_message":
                         handler.delete_message(data.get("id"))
                     elif action_type == "request_scene_assets":

@@ -89,8 +89,6 @@ class DirectorAgent(
         self.is_enabled = True
         self.next_direct_character = {}
         self.next_direct_scene = 0
-        # Actions are already initialized by base class, but we need to re-init for DirectorAgent specifics
-        self.actions = DirectorAgent.init_actions()
 
     @property
     def enabled(self):

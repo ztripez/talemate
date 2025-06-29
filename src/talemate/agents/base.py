@@ -287,12 +287,33 @@ class Agent(ABC):
                 
         # Fallback to old system
         from talemate.prompts import Prompt
-        return await Prompt.request(
+        result = await Prompt.request(
             f"{self.agent_type}.{template_name}",
             self.client,
             kwargs.get('kind', 'create'),
             vars
         )
+        # Prompt.request behavior varies:
+        # - Sometimes returns (raw_response, parsed_data) tuple
+        # - Sometimes returns just raw_response string
+        # - Sometimes returns already parsed data
+        if isinstance(result, tuple) and len(result) == 2:
+            _, parsed_data = result
+            return parsed_data
+        elif isinstance(result, str):
+            # Try to parse JSON from raw response string
+            import json
+            import re
+            # Look for JSON content in response (may be wrapped in tags)
+            json_match = re.search(r'[{\[].*[}\]]', result, re.DOTALL)
+            if json_match:
+                try:
+                    return json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
+            # If no JSON found or parsing failed, return the string
+            return result
+        return result
     
     @property
     def agent_details(self):

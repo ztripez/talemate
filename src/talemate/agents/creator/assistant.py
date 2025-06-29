@@ -307,12 +307,32 @@ class AssistantMixin:
 
         template_vars["dynamic_instructions"] = emission.dynamic_instructions
 
-        content = await Prompt.request(
-            f"creator.contextual-generate",
-            self.client,
-            kind,
-            vars=template_vars,
-        )
+        # Try clean prompt system first
+        try:
+            from talemate.client.instructor_models import CreatorContextualResponse
+            
+            response = await self.request_with_instructor(
+                "contextual-generate",
+                vars=template_vars,
+                response_model=CreatorContextualResponse,
+                kind=kind,
+                max_tokens=getattr(self.client, 'max_token_length', 512),
+            )
+            
+            # Extract content from structured response
+            if isinstance(response, CreatorContextualResponse):
+                content = response.content
+            else:
+                content = response
+                
+        except Exception as e:
+            # Fallback to legacy prompt system
+            content = await Prompt.request(
+                f"creator.contextual-generate",
+                self.client,
+                kind,
+                vars=template_vars,
+            )
         
         emission.response = content
         
@@ -497,14 +517,32 @@ class AssistantMixin:
 
         template_vars["dynamic_instructions"] = emission.dynamic_instructions
 
-        response = await Prompt.request(
-            f"creator.autocomplete-dialogue",
-            self.client,
-            f"create_{response_length}",
-            vars=template_vars,
-            pad_prepended_response=False,
-            dedupe_enabled=False,
-        )
+        # Try clean prompt system first
+        try:
+            from talemate.client.instructor_models import CreatorAutocompleteResponse
+            
+            response = await self.request_with_instructor(
+                "autocomplete-dialogue",
+                vars=template_vars,
+                response_model=CreatorAutocompleteResponse,
+                kind=f"create_{response_length}",
+                max_tokens=getattr(self.client, 'max_token_length', 512),
+            )
+            
+            # Extract suggestion from structured response
+            if isinstance(response, CreatorAutocompleteResponse):
+                response = response.suggestion
+            
+        except Exception as e:
+            # Fallback to legacy prompt system
+            response = await Prompt.request(
+                f"creator.autocomplete-dialogue",
+                self.client,
+                f"create_{response_length}",
+                vars=template_vars,
+                pad_prepended_response=False,
+                dedupe_enabled=False,
+            )
 
         response = response.replace("...", "").lstrip("").rstrip().replace("END-OF-LINE", "")
         
@@ -579,14 +617,33 @@ class AssistantMixin:
 
         template_vars["dynamic_instructions"] = emission.dynamic_instructions
 
-        response = await Prompt.request(
-            f"creator.autocomplete-narrative",
-            self.client,
-            f"create_{response_length}",
-            vars=template_vars,
-            pad_prepended_response=False,
-            dedupe_enabled=False,
-        )
+        # Try clean prompt system first
+        try:
+            from talemate.client.instructor_models import CreatorAutocompleteResponse
+            
+            response = await self.request_with_instructor(
+                "autocomplete-narrative",
+                vars=template_vars,
+                response_model=CreatorAutocompleteResponse,
+                kind=f"create_{response_length}",
+                max_tokens=getattr(self.client, 'max_token_length', 512),
+            )
+            
+            # Extract suggestion from structured response
+            if isinstance(response, CreatorAutocompleteResponse):
+                response = response.suggestion
+                
+        except Exception as e:
+            # Fallback to legacy prompt system
+            response = await Prompt.request(
+                f"creator.autocomplete-narrative",
+                self.client,
+                f"create_{response_length}",
+                vars=template_vars,
+                pad_prepended_response=False,
+                dedupe_enabled=False,
+            )
+            
         response = response.strip().replace("...", "").strip()
 
         if response.startswith(input):
