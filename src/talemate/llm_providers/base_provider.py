@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Type, Union
 from abc import ABC, abstractmethod
 import litellm
+import instructor
+from pydantic import BaseModel
 
 @dataclass
 class ProviderSetting:
@@ -296,6 +298,73 @@ class BaseProvider(ABC):
             log = structlog.get_logger("talemate.llm_providers.base")
             log.error(f"LiteLLM get_max_tokens failed for {full_model_name}: {e}")
             return None
+    
+    def _is_r1_model(self, model_name: str) -> bool:
+        """Check if model is an R1 reasoning model"""
+        return "r1" in model_name.lower() or "deepseek-r1" in model_name.lower()
+    
+    def _format_r1_prompt(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Format messages for R1 models with <think> and <answer> tags"""
+        if not messages:
+            return messages
+            
+        # Find the last user message and modify it
+        formatted_messages = messages.copy()
+        for i in range(len(formatted_messages) - 1, -1, -1):
+            if formatted_messages[i]["role"] == "user":
+                original_content = formatted_messages[i]["content"]
+                formatted_messages[i]["content"] = f"{original_content}\n\nPlease think through this step by step using <think> tags for your reasoning, then provide your final response in <answer> tags."
+                break
+                
+        return formatted_messages
+    
+    
+    async def generate(self, messages: List[Dict[str, str]], model_name: str, response_model: Optional[Type[BaseModel]] = None, **kwargs) -> Union[str, BaseModel]:
+        """Generate text using LiteLLM with optional instructor structured output"""
+        import structlog
+        log = structlog.get_logger("talemate.llm_providers.base")
+        log.debug(f"BaseProvider.generate called with model: {model_name}, response_model: {response_model}")
+        
+        is_r1 = self._is_r1_model(model_name)
+        
+        # Format messages for R1 models
+        if is_r1:
+            messages = self._format_r1_prompt(messages)
+        
+        # Build LiteLLM parameters
+        params = self._build_litellm_params(model_name, messages=messages, **kwargs)
+        
+        if response_model:
+            # Always try instructor first
+            try:
+                client = instructor.from_litellm(litellm.acompletion)
+                response = await client.chat.completions.create(
+                    response_model=response_model,
+                    **params
+                )
+                return response
+            except Exception as e:
+                import structlog
+                log = structlog.get_logger("talemate.llm_providers.base")
+                log.warning(f"Instructor failed, falling back to standard LiteLLM: {e}")
+        
+        # Fallback to standard LiteLLM call
+        try:
+            response = await litellm.acompletion(**params)
+            if hasattr(response, 'choices') and response.choices and len(response.choices) > 0:
+                choice = response.choices[0]
+                if hasattr(choice, 'message') and choice.message:
+                    content = choice.message.content or ""
+                    return content
+                elif hasattr(choice, 'text'):
+                    content = choice.text or ""
+                    return content
+            return ""
+        except Exception as e:
+            import structlog
+            log = structlog.get_logger("talemate.llm_providers.base")
+            log.error(f"Generation failed: {e}")
+            raise
     
 
 

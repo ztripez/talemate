@@ -3,7 +3,7 @@
     "configurations": [
         {
             "name": "Backend: Run Server",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "module": "src.talemate.server.run",
             "args": [
@@ -14,25 +14,8 @@
             ],
             "cwd": "${workspaceFolder}",
             "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false
-        },
-        {
-            "name": "Backend: Debug Server",
-            "type": "python",
-            "request": "launch",
-            "module": "src.talemate.server.run",
-            "args": [
-                "runserver",
-                "--host", "localhost",
-                "--port", "6000",
-                "--debug"
-            ],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
+                "PYTHONPATH": "${workspaceFolder}",
+                "TALEMATE_DEBUG": "1"
             },
             "console": "integratedTerminal",
             "justMyCode": false

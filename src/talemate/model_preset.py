@@ -210,6 +210,9 @@ class ModelPreset:
             try:
                 client = client_class(**client_kwargs)
                 
+                # Add reference to this ModelPreset so the client can access providers
+                client.model_preset = self
+                
                 # Register the client in the global registry so it appears in frontend
                 # Use client_name as the key to match what client status emissions use
                 import talemate.instance as instance

@@ -49,6 +49,7 @@ dependencies = [
     #sentence-transformers==2.2.2
     "sentence_transformers>=2.7.0",
     "litellm>=1.73.1",
+    "instructor[litellm]>=1.9.0",
 ]
 
 [project.optional-dependencies]

@@ -31,6 +31,7 @@ from talemate.emit import emit
 from talemate.events import GameLoopActorIterEvent
 from talemate.prompts import Prompt
 from talemate.scene_message import NarratorMessage
+from talemate.client.instructor_models import NarratorResponse
 
 from talemate.instance import get_agent
 
@@ -227,6 +228,59 @@ class NarratorAgent(
             return self.actions["generation_override"].config["jiggle"].value
         return 0.0
 
+    def get_provider_instance(self):
+        """Get the LiteLLM provider instance from the client"""
+        log.debug(f"Checking for provider instance - client: {self.client}, has model_preset: {hasattr(self.client, 'model_preset')}")
+        if hasattr(self.client, 'model_preset') and self.client.model_preset:
+            log.debug(f"Getting provider instance from model_preset: {self.client.model_preset}")
+            provider = self.client.model_preset.get_provider_instance(self.scene.config)
+            log.debug(f"Provider instance: {provider}")
+            return provider
+        log.debug("No provider instance available, using fallback")
+        return None
+
+    async def _narrate_with_provider(self, template_name: str, vars: dict, kind: str = "narrate", **kwargs):
+        """Helper method to handle narration with provider/instructor support"""
+        provider = self.get_provider_instance()
+        
+        if provider:
+            # Use provider with instructor support
+            prompt_obj = Prompt.get(template_name, vars=vars)
+            
+            # Render the prompt to get the actual text
+            prompt_text = prompt_obj.render()
+            
+            # Get system message from client
+            system_message = self.client.get_system_message(kind)
+            
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt_text}
+            ]
+            
+            # Get generation parameters
+            temperature = kwargs.get('temperature', 0.7)
+            max_tokens = kwargs.get('max_tokens', self.client.max_token_length)
+            
+            response = await provider.generate(
+                messages=messages,
+                model_name=self.client.model_name,
+                response_model=NarratorResponse,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            
+            # If it's a structured response, extract the narration
+            if isinstance(response, NarratorResponse):
+                return response.narration
+            else:
+                # Provider fallback returned plain text
+                return response
+        
+        # No provider available - this shouldn't happen with new system
+        log.warning("No provider instance available for narrator - this indicates a configuration issue")
+        raise RuntimeError("No LLM provider available for narrator agent")
+
     @property
     def max_generation_length(self) -> int:
         if self.actions["generation_override"].enabled:
@@ -256,48 +310,27 @@ class NarratorAgent(
     def clean_result(self, result:str, ensure_dialog_format:bool=True, force_narrative:bool=True) -> str:
         """
         Cleans the result of a narration
+        With structured outputs, most parsing logic is no longer needed
         """
-
+        
+        # Basic cleanup
         result = result.strip().strip(":").strip()
-
-        character_names = [c.name for c in self.scene.get_characters()]
-
-        cleaned = []
+        
+        # Skip lines that start with # (comments)
+        cleaned_lines = []
         for line in result.split("\n"):
-            
-            # skip lines that start with a #
-            if line.startswith("#"):
-                continue
-            
-            log.debug("clean_result", line=line)
-            
-            character_dialogue_detected = False
-            
-            for character_name in character_names:
-                if not character_name:
-                    continue
-                if line.lower().startswith(f"{character_name}:"):
-                    character_dialogue_detected = True
-                elif line.startswith(f"{character_name.upper()}"):
-                    character_dialogue_detected = True
-                    
-                if character_dialogue_detected:
-                    break
-            
-            if character_dialogue_detected:
-                break
-                
-            cleaned.append(line)
-
-        result = "\n".join(cleaned)
+            if not line.startswith("#"):
+                cleaned_lines.append(line)
+        result = "\n".join(cleaned_lines)
         
+        # Strip partial sentences (still useful for clean endings)
         result = util.strip_partial_sentences(result)
-        editor = get_agent("editor")
         
+        # Apply editor exposition fixing if enabled
+        editor = get_agent("editor")
         if ensure_dialog_format or force_narrative:
             if editor.fix_exposition_enabled and editor.fix_exposition_narrator:
                 result = editor.fix_exposition_in_text(result)
-            
         
         return result
 
@@ -395,11 +428,8 @@ class NarratorAgent(
         """
         Narrate the scene
         """
-
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.narrate-scene",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "max_tokens": self.client.max_token_length,
@@ -408,9 +438,7 @@ class NarratorAgent(
             },
         )
 
-        response = self.clean_result(response.strip())
-
-        return response
+        return self.clean_result(response)
 
     @set_processing
     @store_context_state('narrative_direction')
@@ -434,11 +462,9 @@ class NarratorAgent(
         log.debug(
             "narrative_direction", narrative_direction=narrative_direction
         )
-        
-        response = await Prompt.request(
+
+        response = await self._narrate_with_provider(
             "narrator.narrate-progress",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "max_tokens": self.client.max_token_length,
@@ -448,6 +474,7 @@ class NarratorAgent(
                 "npc_names": npc_names,
                 "extra_instructions": self.extra_instructions,
             },
+            temperature=0.7,
         )
 
         log.debug("progress_story", response=response)
@@ -464,10 +491,8 @@ class NarratorAgent(
         """
         Narrate a specific query
         """
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.narrate-query",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "max_tokens": self.client.max_token_length,
@@ -479,7 +504,7 @@ class NarratorAgent(
             },
         )
         response = self.clean_result(
-            response.strip(), 
+            response, 
             ensure_dialog_format=False, 
             force_narrative=as_narrative
         )
@@ -493,10 +518,8 @@ class NarratorAgent(
         Narrate a specific character
         """
         
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.narrate-character",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "character": character,
@@ -506,7 +529,7 @@ class NarratorAgent(
             },
         )
 
-        response = self.clean_result(response.strip(), ensure_dialog_format=False, force_narrative=True)
+        response = self.clean_result(response, ensure_dialog_format=False, force_narrative=True)
 
         return response
 
@@ -519,10 +542,8 @@ class NarratorAgent(
         Narrate a specific character
         """
 
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.narrate-time-passage",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "max_tokens": self.client.max_token_length,
@@ -536,7 +557,7 @@ class NarratorAgent(
 
         log.debug("narrate_time_passage", response=response)
 
-        response = self.clean_result(response.strip())
+        response = self.clean_result(response)
 
         return response
 
@@ -551,10 +572,8 @@ class NarratorAgent(
         Narrate after a line of dialogue
         """
 
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.narrate-after-dialogue",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "max_tokens": self.client.max_token_length,
@@ -566,7 +585,7 @@ class NarratorAgent(
 
         log.debug("narrate_after_dialogue", response=response)
 
-        response = self.clean_result(response.strip())
+        response = self.clean_result(response)
         return response
 
     async def narrate_environment(self, narrative_direction: str = None):
@@ -589,10 +608,8 @@ class NarratorAgent(
         Narrate a character entering the scene
         """
 
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.narrate-character-entry",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "max_tokens": self.client.max_token_length,
@@ -602,7 +619,7 @@ class NarratorAgent(
             },
         )
 
-        response = self.clean_result(response.strip().strip("*"))
+        response = self.clean_result(response.strip("*"))
 
         return response
 
@@ -617,10 +634,8 @@ class NarratorAgent(
         Narrate a character exiting the scene
         """
 
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.narrate-character-exit",
-            self.client,
-            "narrate",
             vars={
                 "scene": self.scene,
                 "max_tokens": self.client.max_token_length,
@@ -630,7 +645,7 @@ class NarratorAgent(
             },
         )
 
-        response = self.clean_result(response.strip().strip("*"))
+        response = self.clean_result(response.strip("*"))
 
         return response
 
@@ -640,10 +655,8 @@ class NarratorAgent(
         Paraphrase a narration
         """
 
-        response = await Prompt.request(
+        response = await self._narrate_with_provider(
             "narrator.paraphrase",
-            self.client,
-            "narrate",
             vars={
                 "text": narration,
                 "scene": self.scene,
@@ -653,7 +666,7 @@ class NarratorAgent(
 
         log.debug("paraphrase", narration=narration, response=response)
 
-        response = self.clean_result(response.strip().strip("*"))
+        response = self.clean_result(response.strip("*"))
 
         return response
 

@@ -139,6 +139,8 @@ class WebsocketHandler(Receiver):
                 
                 # Use client_name as key to match client status emissions
                 self.llm_clients[client_name] = client_dict
+                # Also index by config_id for direct reference
+                self.llm_clients[config_id] = client_dict
                 
                 log.info(
                     "Created client from ModelPreset",
