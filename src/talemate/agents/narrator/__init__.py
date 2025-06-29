@@ -208,13 +208,13 @@ class NarratorAgent(
 
     def __init__(
         self,
-        client: client.TaleMateClient,
+        model_preset=None,
+        scene_config=None, 
+        client: client.TaleMateClient = None,
         **kwargs,
     ):
-        self.client = client
-
-        # agent actions
-        self.actions = NarratorAgent.init_actions()
+        # Use base class constructor for ModelPreset-first pattern
+        super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
 
     @property
     def extra_instructions(self) -> str:
@@ -228,16 +228,7 @@ class NarratorAgent(
             return self.actions["generation_override"].config["jiggle"].value
         return 0.0
 
-    def get_provider_instance(self):
-        """Get the LiteLLM provider instance from the client"""
-        log.debug(f"Checking for provider instance - client: {self.client}, has model_preset: {hasattr(self.client, 'model_preset')}")
-        if hasattr(self.client, 'model_preset') and self.client.model_preset:
-            log.debug(f"Getting provider instance from model_preset: {self.client.model_preset}")
-            provider = self.client.model_preset.get_provider_instance(self.scene.config)
-            log.debug(f"Provider instance: {provider}")
-            return provider
-        log.debug("No provider instance available, using fallback")
-        return None
+    # get_provider_instance() now inherited from base Agent class
 
     async def _narrate_with_provider(self, template_name: str, vars: dict, kind: str = "narrate", **kwargs):
         """Helper method to handle narration with provider/instructor support"""

@@ -167,12 +167,16 @@ class ConversationAgent(
 
     def __init__(
         self,
-        client: client.TaleMateClient,
+        model_preset=None,
+        scene_config=None,
+        client: client.TaleMateClient = None,
         kind: Optional[str] = "pygmalion",
         logging_enabled: Optional[bool] = True,
         **kwargs,
     ):
-        self.client = client
+        # Use base class constructor for ModelPreset-first pattern
+        super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
+        
         self.kind = kind
         self.logging_enabled = logging_enabled
         self.logging_date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -183,6 +187,7 @@ class ConversationAgent(
         if self.agent_type != "conversation":
             return
 
+        # Actions are already initialized by base class, but we need to re-init for ConversationAgent specifics
         self.actions = ConversationAgent.init_actions()
 
     @property

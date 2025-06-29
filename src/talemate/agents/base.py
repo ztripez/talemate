@@ -216,6 +216,40 @@ class Agent(ABC):
     essential = True
     ready_check_error = None
     
+    def __init__(self, model_preset=None, scene_config=None, client=None, **kwargs):
+        """
+        Modern constructor supporting ModelPreset-first architecture.
+        
+        Args:
+            model_preset: ModelPreset instance (new pattern)
+            scene_config: Scene configuration for provider/client initialization
+            client: Legacy client instance (old pattern, maintained for compatibility)
+            **kwargs: Additional arguments
+        """
+        # Support both new and old patterns
+        if model_preset is not None:
+            # New ModelPreset-first pattern
+            self.model_preset = model_preset
+            if scene_config:
+                self.model_preset.set_scene_config(scene_config)
+            # Create client from model preset for backward compatibility
+            self.client = model_preset.get_client(scene_config)
+        elif client is not None:
+            # Old client-first pattern (backward compatibility)
+            self.client = client
+            # Get model preset from client if available
+            self.model_preset = getattr(client, 'model_preset', None)
+        else:
+            # No LLM access configured
+            self.client = None
+            self.model_preset = None
+        
+        # Initialize configurable actions
+        self.actions = self.init_actions()
+        
+        # Store additional kwargs
+        self.kwargs = kwargs
+    
     @classmethod
     def init_actions(cls, actions: dict[str, AgentAction] | None = None) -> dict[str, AgentAction]:
         if actions is None:
@@ -223,11 +257,24 @@ class Agent(ABC):
         
         return actions
     
+    def get_provider_instance(self):
+        """Get the LiteLLM provider instance (ModelPreset-first pattern)"""
+        if self.model_preset:
+            return self.model_preset.get_provider()
+        return None
+    
+    def get_client_instance(self):
+        """Get the legacy client instance"""
+        if self.model_preset:
+            return self.model_preset.get_client()
+        return self.client
+    
     @property
     def agent_details(self):
-        if hasattr(self, "client"):
-            if self.client:
-                return self.client.name
+        if self.model_preset:
+            return f"{self.model_preset.provider_name} - {self.model_preset.model_name}"
+        elif hasattr(self, "client") and self.client:
+            return self.client.name
         return None
 
     @property

@@ -62,12 +62,14 @@ class ModelPreset:
     """
     Bridge between new LiteLLM providers and old client system.
     Represents a configured model that can provide both new and old client interfaces.
+    Now serves as the primary interface for agent LLM access.
     """
     model_config: ModelConfig
     
     def __post_init__(self):
         self._provider_instance = None
         self._old_client = None
+        self._scene_config = None  # Cache scene config for consistent provider access
     
     @classmethod
     def from_model_config(cls, config_id: str, model_config_data: Dict[str, Any]) -> 'ModelPreset':
@@ -232,6 +234,43 @@ class ModelPreset:
         
         return self._old_client
     
+    def set_scene_config(self, config):
+        """Set the scene config for consistent provider/client access"""
+        self._scene_config = config
+    
+    def get_provider(self, config=None):
+        """Get provider instance for agents - simplified interface"""
+        if config is None:
+            config = self._scene_config
+        if config is None:
+            log.warning("No scene config available for provider access")
+            return None
+        return self.get_provider_instance(config)
+    
+    def get_client(self, config=None, name: str | None = None):
+        """Get old client instance for agents - simplified interface"""
+        if config is None:
+            config = self._scene_config
+        if config is None:
+            log.warning("No scene config available for client access")
+            return None
+        return self.get_old_client(config, name)
+    
+    @property
+    def model_name(self):
+        """Quick access to model name"""
+        return self.model_config.model_name
+    
+    @property
+    def provider_name(self):
+        """Quick access to provider name"""
+        return self.model_config.provider_name
+    
+    @property
+    def config_id(self):
+        """Quick access to config ID"""
+        return self.model_config.config_id
+    
     def to_client_dict(self, config, name: str | None = None):
         """Convert to the old client dictionary format expected by websocket_server"""
         client = self.get_old_client(config, name)
@@ -247,4 +286,5 @@ class ModelPreset:
             "name": client.name,
             "type": provider_instance.get_old_client_type(),
             "enabled": True,
+            "model_preset": self,  # Add ModelPreset reference for agent access
         }

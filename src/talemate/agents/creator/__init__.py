@@ -42,10 +42,15 @@ class CreatorAgent(
 
     def __init__(
         self,
-        client: client.ClientBase,
+        model_preset=None,
+        scene_config=None,
+        client: client.ClientBase = None,
         **kwargs,
     ):
-        self.client = client
+        # Use base class constructor for ModelPreset-first pattern
+        super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
+        
+        # Actions are already initialized by base class, but we need to re-init for CreatorAgent specifics
         self.actions = CreatorAgent.init_actions()
 
     @set_processing

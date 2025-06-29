@@ -155,12 +155,15 @@ class VisualBase(Agent):
 
         return actions
 
-    def __init__(self, client: ClientBase, *kwargs):
-        self.client = client
+    def __init__(self, model_preset=None, scene_config=None, client: ClientBase = None, **kwargs):
+        # Use base class constructor for ModelPreset-first pattern
+        super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
+        
         self.is_enabled = False
         self.backend_ready = False
         self.initialized = False
         self.config = load_config()
+        # Actions are already initialized by base class, but we need to re-init for VisualBase specifics
         self.actions = VisualBase.init_actions()
 
         signal_handlers["config_saved"].connect(self.on_config_saved)

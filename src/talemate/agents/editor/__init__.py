@@ -86,9 +86,12 @@ class EditorAgent(
         RevisionMixin.add_actions(actions)
         return actions
 
-    def __init__(self, client, **kwargs):
-        self.client = client
+    def __init__(self, model_preset=None, scene_config=None, client=None, **kwargs):
+        # Use base class constructor for ModelPreset-first pattern
+        super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
+        
         self.is_enabled = True
+        # Actions are already initialized by base class, but we need to re-init for EditorAgent specifics
         self.actions = EditorAgent.init_actions()
     
     @property

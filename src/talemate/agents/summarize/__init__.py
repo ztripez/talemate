@@ -131,9 +131,11 @@ class SummarizeAgent(
         ContextInvestigationMixin.add_actions(actions)
         return actions
 
-    def __init__(self, client, **kwargs):
-        self.client = client
+    def __init__(self, model_preset=None, scene_config=None, client=None, **kwargs):
+        # Use base class constructor for ModelPreset-first pattern
+        super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
 
+        # Actions are already initialized by base class, but we need to re-init for SummarizeAgent specifics
         self.actions = SummarizeAgent.init_actions()
 
     @property

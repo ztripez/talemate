@@ -236,8 +236,17 @@ class WebsocketHandler(Receiver):
             if agent_typ == "memory":
                 agent_config["scene"] = scene
 
+            # Add scene_config for ModelPreset-based agents
+            if "model_preset" in agent_config:
+                agent_config["scene_config"] = scene.config
+
             log.debug("init agent", agent_typ=agent_typ, agent_config=agent_config)
             agent = instance.get_agent(agent_typ, **agent_config)
+            
+            # Update ModelPreset with scene config for existing agents
+            if hasattr(agent, 'model_preset') and agent.model_preset and scene.config:
+                agent.model_preset.set_scene_config(scene.config)
+                log.debug(f"Updated agent {agent_typ} ModelPreset with scene config")
 
             # if getattr(agent, "client", None):
             #    self.llm_clients[agent.client.name] = agent.client
@@ -399,19 +408,33 @@ class WebsocketHandler(Receiver):
             if client_name not in self.llm_clients:
                 continue
 
-            self.agents[name] = {
-                "client": self.llm_clients[client_name]["name"],
-                "name": name,
-            }
-
-            agent_instance = instance.get_agent(name, **self.agents[name])
-
-            try:
-                agent_instance.client = self.llm_clients[client_name]["client"]
-            except KeyError:
-                self.llm_clients[client_name]["client"] = agent_instance.client = (
-                    instance.get_client(client_name)
-                )
+            # Get ModelPreset for new pattern
+            model_preset = self.llm_clients[client_name].get("model_preset")
+            
+            if model_preset:
+                # Use new ModelPreset-first pattern
+                # Note: scene_config will be set when scene is actually created
+                self.agents[name] = {
+                    "model_preset": model_preset,
+                    "name": name,
+                }
+                agent_instance = instance.get_agent(name, **self.agents[name])
+                log.debug(f"Created agent {name} with ModelPreset pattern")
+            else:
+                # Fallback to old client-based pattern
+                self.agents[name] = {
+                    "client": self.llm_clients[client_name]["name"],
+                    "name": name,
+                }
+                agent_instance = instance.get_agent(name, **self.agents[name])
+                
+                try:
+                    agent_instance.client = self.llm_clients[client_name]["client"]
+                except KeyError:
+                    self.llm_clients[client_name]["client"] = agent_instance.client = (
+                        instance.get_client(client_name)
+                    )
+                log.debug(f"Created agent {name} with legacy client pattern")
 
             if agent_instance.has_toggle:
                 self.agents[name]["enabled"] = agent["enabled"]

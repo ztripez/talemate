@@ -122,11 +122,14 @@ class WorldStateAgent(
         CharacterProgressionMixin.add_actions(actions)
         return actions
 
-    def __init__(self, client, **kwargs):
-        self.client = client
+    def __init__(self, model_preset=None, scene_config=None, client=None, **kwargs):
+        # Use base class constructor for ModelPreset-first pattern
+        super().__init__(model_preset=model_preset, scene_config=scene_config, client=client, **kwargs)
+        
         self.is_enabled = True
         self.next_update = 0
         self.next_pin_check = 0
+        # Actions are already initialized by base class, but we need to re-init for WorldStateAgent specifics
         self.actions = WorldStateAgent.init_actions()
 
     @property
