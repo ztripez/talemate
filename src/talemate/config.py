@@ -495,6 +495,21 @@ class Appearance(BaseModel):
     
 
 
+class ModelPresetConfig(BaseModel):
+    """Complete configuration for a ModelPreset instance - replaces model_configs"""
+    config_id: str
+    provider_name: str
+    model_name: str
+    model_full_name: str
+    provider_instance_id: str
+    capabilities: Dict[str, Any] = Field(default_factory=dict)
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    max_context_size: Union[int, None] = None
+    double_coercion: Union[str, None] = None
+    system_prompts: SystemPrompts = SystemPrompts()
+    enabled: bool = True
+
+
 class Config(BaseModel):
     clients: Dict[str, AnnotatedClient] = {}
 
@@ -539,6 +554,8 @@ class Config(BaseModel):
     litellm_providers: Dict[str, Dict[str, Any]] = {}
     
     model_configs: Dict[str, Dict[str, Any]] = {}
+    
+    model_presets: Dict[str, ModelPresetConfig] = {}
     
     class Config:
         extra = "ignore"

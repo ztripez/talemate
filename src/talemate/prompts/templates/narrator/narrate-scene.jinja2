@@ -27,6 +27,25 @@ Your new narration must provide new and interesting visual details that enhance 
 
 {{ extra_instructions }}
 
+{% if is_r1_model -%}
+
+**Instructions for R1 models:**
+- Respond with ONLY the JSON structure
+- No thinking tags or explanations
+- Keep narration vivid and descriptive
+
+**Response format:**
+```json
+{
+  "narration": "Your detailed narrative description here",
+  "scene_elements": ["visual_element1", "visual_element2"],
+  "mood": "current scene mood"
+}
+```
+
+Generate your JSON response:
+{% else -%}
 YOU MUST NOT WRITE DIALOGUE.
 YOU MUST NOT PROGRESS THE SCENE.
+{% endif -%}
 <|CLOSE_SECTION|>

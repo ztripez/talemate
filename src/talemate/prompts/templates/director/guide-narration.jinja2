@@ -74,8 +74,25 @@ Content Classification: {{ scene.context }}
 
 Use terse, direct language. Cut all unnecessary words. Be blunt and brief like scribbles on a notepad.
 
+{% if is_r1_model -%}
+**Instructions for R1 models:**
+- Respond with ONLY the JSON structure
+- No thinking tags or explanations  
+- Keep guidance clear and direct
+
+**Response format:**
+```json
+{
+  "guidance": "Clear direction for the response",
+  "focus": "Main aspect to emphasize"
+}
+```
+
+Generate your JSON response:
+{% else -%}
 Provide your response in the following format:
 
 GUIDANCE: ... your guidance for the narrator ...
 <|CLOSE_SECTION|>
 {{ bot_token }} GUIDANCE:
+{% endif %}

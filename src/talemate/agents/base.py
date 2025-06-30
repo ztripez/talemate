@@ -255,6 +255,21 @@ class Agent(ABC):
         if actions is None:
             actions = {}
         
+        # Add R1 compatibility settings
+        actions["r1_compatibility"] = AgentAction(
+            enabled=True,
+            label="R1 Compatibility", 
+            description="Enable enhanced compatibility for DeepSeek R1 models",
+            config={
+                "enabled": AgentActionConfig(
+                    type="bool",
+                    label="Enable R1 mode",
+                    description="Enable R1 optimizations (auto-detects DeepSeek R1 models)",
+                    value=True,
+                ),
+            },
+        )
+        
         return actions
     
     def get_provider_instance(self):
@@ -269,6 +284,49 @@ class Agent(ABC):
             return self.model_preset.get_client()
         return self.client
     
+    def is_r1_model(self):
+        """Check if current model is DeepSeek R1/Reasoner"""
+        if not self.model_preset:
+            return False
+            
+        # Check if r1_compatibility action exists and is enabled
+        if not hasattr(self, 'actions') or 'r1_compatibility' not in self.actions:
+            return False
+            
+        if not self.actions["r1_compatibility"].config["enabled"].value:
+            return False
+            
+        model_name = self.model_preset.model_name.lower()
+        return "deepseek" in model_name and ("r1" in model_name or "reasoner" in model_name)
+    
+    def clean_r1_response(self, response):
+        """Remove R1's thinking tags from responses"""
+        if not isinstance(response, str):
+            return response
+            
+        import re
+        # Only remove <thinking>...</thinking> blocks
+        cleaned = re.sub(r'<thinking>.*?</thinking>', '', response, flags=re.DOTALL)
+        return cleaned.strip()
+    
+    def get_r1_compatible_model(self, response_model):
+        """Get simplified response model for R1 compatibility"""
+        if not self.is_r1_model() or not response_model:
+            return response_model
+            
+        # Auto-detect "Simple" version of the model
+        simple_name = f"Simple{response_model.__name__}"
+        try:
+            from talemate.client.instructor_models import __dict__ as models
+            if simple_name in models:
+                return models[simple_name]
+        except (ImportError, KeyError):
+            pass
+            
+        return response_model
+    
+    
+
     async def request_with_instructor(self, template_name: str, vars: dict, response_model=None, **kwargs):
         """
         Use clean prompt system with instructor when ModelPreset available.
@@ -276,31 +334,87 @@ class Agent(ABC):
         """
         if self.model_preset:
             try:
-                return await self.model_preset.request_clean(
-                    f"{self.agent_type}.{template_name}",
-                    vars,
-                    response_model=response_model,
-                    **kwargs
-                )
+                # R1 handling: use simplified models and add R1 context
+                if self.is_r1_model():
+                    response_model = self.get_r1_compatible_model(response_model)
+                    vars = vars.copy()
+                    vars["is_r1_model"] = True
+                
+                # Simple retry for R1 empty responses
+                max_attempts = 3 if self.is_r1_model() else 1
+                for attempt in range(max_attempts):
+                    try:
+                        response = await self.model_preset.request_clean(
+                            f"{self.agent_type}.{template_name}",
+                            vars,
+                            response_model=response_model,
+                            **kwargs
+                        )
+                        
+                        # Check for empty R1 responses
+                        if response and response != "":
+                            if self.is_r1_model() and isinstance(response, str):
+                                response = self.clean_r1_response(response)
+                            return response
+                        elif not self.is_r1_model():
+                            return response
+                            
+                    except Exception as e:
+                        if attempt == max_attempts - 1:
+                            raise
+                        log.debug(f"R1 retry {attempt + 1}: {e}")
+                        
             except Exception as e:
                 log.warning(f"Clean prompt failed, falling back: {e}")
                 
-        # Fallback to old system
+        # Fallback to old system with R1 support
         from talemate.prompts import Prompt
-        result = await Prompt.request(
-            f"{self.agent_type}.{template_name}",
-            self.client,
-            kwargs.get('kind', 'create'),
-            vars
-        )
+        
+        # Add R1 context for legacy templates
+        if self.is_r1_model():
+            vars = vars.copy()
+            vars["is_r1_model"] = True
+        
+        # R1 retry logic for legacy fallback
+        max_attempts = 3 if self.is_r1_model() else 1
+        for attempt in range(max_attempts):
+            try:
+                result = await Prompt.request(
+                    f"{self.agent_type}.{template_name}",
+                    self.client,
+                    kwargs.get('kind', 'create'),
+                    vars
+                )
+                
+                # Check for R1 empty responses in legacy fallback
+                if self.is_r1_model():
+                    if result and result != "":
+                        break  # Got valid response
+                    elif attempt < max_attempts - 1:
+                        log.debug(f"R1 legacy fallback retry {attempt + 1}: empty response")
+                        continue
+                else:
+                    break  # Non-R1 models don't need retry
+                    
+            except Exception as e:
+                if attempt == max_attempts - 1:
+                    raise
+                log.debug(f"R1 legacy fallback retry {attempt + 1}: {e}")
+        # Handle legacy Prompt.request response format and apply R1 cleaning
         # Prompt.request behavior varies:
         # - Sometimes returns (raw_response, parsed_data) tuple
         # - Sometimes returns just raw_response string
         # - Sometimes returns already parsed data
         if isinstance(result, tuple) and len(result) == 2:
             _, parsed_data = result
+            # Apply R1 cleaning to parsed data if it's a string
+            if self.is_r1_model() and isinstance(parsed_data, str):
+                parsed_data = self.clean_r1_response(parsed_data)
             return parsed_data
         elif isinstance(result, str):
+            # Apply R1 cleaning to raw string response
+            if self.is_r1_model():
+                result = self.clean_r1_response(result)
             # Try to parse JSON from raw response string
             import json
             import re
@@ -313,6 +427,9 @@ class Agent(ABC):
                     pass
             # If no JSON found or parsing failed, return the string
             return result
+        # Apply R1 cleaning to any other response type that might be a string
+        if self.is_r1_model() and isinstance(result, str):
+            result = self.clean_r1_response(result)
         return result
     
     @property
@@ -380,8 +497,28 @@ class Agent(ABC):
 
     @classmethod
     def config_options(cls, agent=None):
+        # Get available clients/ModelPresets for dropdown
+        available_clients = []
+        
+        # Add legacy clients
+        for name, _ in instance.client_instances():
+            available_clients.append(name)
+        
+        # Add ModelPresets from current config
+        try:
+            from talemate.config import load_config
+            config = load_config(as_model=True)
+            if config and hasattr(config, 'model_presets'):
+                for preset_id, preset_config in config.model_presets.items():
+                    if preset_config.enabled:
+                        # Use a clear display name for ModelPresets
+                        display_name = f"{preset_config.provider_name} - {preset_config.model_name}"
+                        available_clients.append(display_name)
+        except Exception as e:
+            log.warning(f"Failed to load ModelPresets for config_options: {e}")
+        
         config_options = {
-            "client": [name for name, _ in instance.client_instances()],
+            "client": available_clients,
             "enabled": agent.enabled if agent else True,
             "has_toggle": agent.has_toggle if agent else False,
             "experimental": agent.experimental if agent else False,

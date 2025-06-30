@@ -13,7 +13,6 @@ import talemate.util as util
 from talemate.emit import emit
 from talemate.events import GameLoopEvent
 from talemate.instance import get_agent
-from talemate.prompts import Prompt
 from talemate.scene_message import (
     ReinforcementMessage,
     TimePassageMessage,
@@ -264,54 +263,38 @@ class WorldStateAgent(
     async def request_world_state(self):
         t1 = time.time()
 
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateResponse
-            
-            response = await self.request_with_instructor(
-                "request-world-state-v2",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "object_type": "character",
-                    "object_type_plural": "characters",
-                },
-                response_model=WorldStateResponse,
-                kind="analyze_long",
-                max_tokens=getattr(self.client, 'max_token_length', 2048),
-            )
-            
-            # Convert structured response to dict if needed
-            if isinstance(response, WorldStateResponse):
-                world_state = response.model_dump()
-            elif isinstance(response, str):
-                # Parse JSON from string response (fallback handling)
-                import json
-                import re
-                json_match = re.search(r'[{\[].*[}\]]', response, re.DOTALL)
-                if json_match:
-                    try:
-                        world_state = json.loads(json_match.group())
-                    except json.JSONDecodeError:
-                        world_state = response
-                else:
+        from talemate.client.instructor_models import WorldStateResponse
+        
+        response = await self.request_with_instructor(
+            "request-world-state-v2",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "object_type": "character",
+                "object_type_plural": "characters",
+            },
+            response_model=WorldStateResponse,
+            kind="analyze_long",
+            max_tokens=getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+        )
+        
+        # Convert structured response to dict if needed
+        if isinstance(response, WorldStateResponse):
+            world_state = response.model_dump()
+        elif isinstance(response, str):
+            # Parse JSON from string response (fallback handling)
+            import json
+            import re
+            json_match = re.search(r'[{\[].*[}\]]', response, re.DOTALL)
+            if json_match:
+                try:
+                    world_state = json.loads(json_match.group())
+                except json.JSONDecodeError:
                     world_state = response
             else:
                 world_state = response
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            _, world_state = await Prompt.request(
-                "world_state.request-world-state-v2",
-                self.client,
-                "analyze_long",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "object_type": "character",
-                    "object_type_plural": "characters",
-                },
-            )
+        else:
+            world_state = response
 
         self.scene.log.debug(
             "request_world_state", response=world_state, time=time.time() - t1
@@ -328,48 +311,29 @@ class WorldStateAgent(
         response_length=1024,
         num_queries=1,
     ):
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateAnalysisResponse
-            
-            result = await self.request_with_instructor(
-                "analyze-text-and-extract-context",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "text": text,
-                    "goal": goal,
-                    "include_character_context": include_character_context,
-                    "response_length": response_length,
-                    "num_queries": num_queries,
-                },
-                response_model=WorldStateAnalysisResponse,
-                kind=f"investigate_{response_length}",
-                max_tokens=response_length,
-            )
-            
-            # Extract answer from structured response
-            if isinstance(result, WorldStateAnalysisResponse):
-                response = result.answer
-            else:
-                response = result
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            response = await Prompt.request(
-                "world_state.analyze-text-and-extract-context",
-                self.client,
-                f"investigate_{response_length}",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "text": text,
-                    "goal": goal,
-                    "include_character_context": include_character_context,
-                    "response_length": response_length,
-                    "num_queries": num_queries,
-                },
-            )
+        from talemate.client.instructor_models import WorldStateAnalysisResponse
+        
+        result = await self.request_with_instructor(
+            "analyze-text-and-extract-context",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "text": text,
+                "goal": goal,
+                "include_character_context": include_character_context,
+                "response_length": response_length,
+                "num_queries": num_queries,
+            },
+            response_model=WorldStateAnalysisResponse,
+            kind=f"investigate_{response_length}",
+            max_tokens=response_length,
+        )
+        
+        # Extract answer from structured response
+        if isinstance(result, WorldStateAnalysisResponse):
+            response = result.answer
+        else:
+            response = result
 
         log.debug(
             "analyze_text_and_extract_context", goal=goal, text=text, response=response
@@ -386,49 +350,29 @@ class WorldStateAgent(
         response_length=1024,
         num_queries=1,
     ) -> list[str]:
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateQueryResponse
-            
-            result = await self.request_with_instructor(
-                "analyze-text-and-generate-rag-queries",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "text": text,
-                    "goal": goal,
-                    "include_character_context": include_character_context,
-                    "response_length": response_length,
-                    "num_queries": num_queries,
-                },
-                response_model=WorldStateQueryResponse,
-                kind=f"investigate_{response_length}",
-                max_tokens=response_length,
-            )
-            
-            # Extract queries from structured response
-            if isinstance(result, WorldStateQueryResponse):
-                queries = result.queries
-            else:
-                queries = extract_list(result)
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            response = await Prompt.request(
-                "world_state.analyze-text-and-generate-rag-queries",
-                self.client,
-                f"investigate_{response_length}",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "text": text,
-                    "goal": goal,
-                    "include_character_context": include_character_context,
-                    "response_length": response_length,
-                    "num_queries": num_queries,
-                },
-            )
-            queries = extract_list(response)
+        from talemate.client.instructor_models import WorldStateQueryResponse
+        
+        result = await self.request_with_instructor(
+            "analyze-text-and-generate-rag-queries",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "text": text,
+                "goal": goal,
+                "include_character_context": include_character_context,
+                "response_length": response_length,
+                "num_queries": num_queries,
+            },
+            response_model=WorldStateQueryResponse,
+            kind=f"investigate_{response_length}",
+            max_tokens=response_length,
+        )
+        
+        # Extract queries from structured response
+        if isinstance(result, WorldStateQueryResponse):
+            queries = result.queries
+        else:
+            queries = extract_list(result)
 
         memory_agent = get_agent("memory")
 
@@ -454,42 +398,26 @@ class WorldStateAgent(
 
         kind = "analyze_freeform_short" if short else "analyze_freeform"
 
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateAnalysisResponse
-            
-            result = await self.request_with_instructor(
-                "analyze-text-and-follow-instruction",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "text": text,
-                    "instruction": instruction,
-                },
-                response_model=WorldStateAnalysisResponse,
-                kind=kind,
-                max_tokens=getattr(self.client, 'max_token_length', 2048),
-            )
-            
-            # Extract answer from structured response
-            if isinstance(result, WorldStateAnalysisResponse):
-                response = result.answer
-            else:
-                response = result
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            response = await Prompt.request(
-                "world_state.analyze-text-and-follow-instruction",
-                self.client,
-                kind,
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "text": text,
-                    "instruction": instruction,
-                },
-            )
+        from talemate.client.instructor_models import WorldStateAnalysisResponse
+        
+        result = await self.request_with_instructor(
+            "analyze-text-and-follow-instruction",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "text": text,
+                "instruction": instruction,
+            },
+            response_model=WorldStateAnalysisResponse,
+            kind=kind,
+            max_tokens=getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+        )
+        
+        # Extract answer from structured response
+        if isinstance(result, WorldStateAnalysisResponse):
+            response = result.answer
+        else:
+            response = result
 
         log.debug(
             "analyze_and_follow_instruction",
@@ -509,42 +437,26 @@ class WorldStateAgent(
     ):
         kind = f"investigate_{response_length}"
         
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateAnalysisResponse
-            
-            result = await self.request_with_instructor(
-                "analyze-text-and-answer-question",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "text": text,
-                    "query": query,
-                },
-                response_model=WorldStateAnalysisResponse,
-                kind=kind,
-                max_tokens=response_length,
-            )
-            
-            # Extract answer from structured response
-            if isinstance(result, WorldStateAnalysisResponse):
-                response = result.answer
-            else:
-                response = result
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            response = await Prompt.request(
-                "world_state.analyze-text-and-answer-question",
-                self.client,
-                kind,
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "text": text,
-                    "query": query,
-                },
-            )
+        from talemate.client.instructor_models import WorldStateAnalysisResponse
+        
+        result = await self.request_with_instructor(
+            "analyze-text-and-answer-question",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "text": text,
+                "query": query,
+            },
+            response_model=WorldStateAnalysisResponse,
+            kind=kind,
+            max_tokens=response_length,
+        )
+        
+        # Extract answer from structured response
+        if isinstance(result, WorldStateAnalysisResponse):
+            response = result.answer
+        else:
+            response = result
 
         log.debug(
             "analyze_text_and_answer_question",
@@ -569,46 +481,28 @@ class WorldStateAgent(
         and follows the instructions to generate a response.
         """
         
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateAnalysisResponse
-            
-            result = await self.request_with_instructor(
-                "analyze-history-and-follow-instructions",
-                vars={
-                    "instructions": instructions,
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "entries": entries,
-                    "analysis": analysis,
-                    "response_length": response_length,
-                },
-                response_model=WorldStateAnalysisResponse,
-                kind=f"investigate_{response_length}",
-                max_tokens=response_length,
-            )
-            
-            # Extract answer from structured response
-            if isinstance(result, WorldStateAnalysisResponse):
-                response = result.answer
-            else:
-                response = result
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            response = await Prompt.request(
-                "world_state.analyze-history-and-follow-instructions",
-                self.client,
-                f"investigate_{response_length}",
-                vars={
-                    "instructions": instructions,
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "entries": entries,
-                    "analysis": analysis,
-                    "response_length": response_length,
-                },
-            )
+        from talemate.client.instructor_models import WorldStateAnalysisResponse
+        
+        result = await self.request_with_instructor(
+            "analyze-history-and-follow-instructions",
+            vars={
+                "instructions": instructions,
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "entries": entries,
+                "analysis": analysis,
+                "response_length": response_length,
+            },
+            response_model=WorldStateAnalysisResponse,
+            kind=f"investigate_{response_length}",
+            max_tokens=response_length,
+        )
+        
+        # Extract answer from structured response
+        if isinstance(result, WorldStateAnalysisResponse):
+            response = result.answer
+        else:
+            response = result
         
         return response.strip()
 
@@ -633,40 +527,25 @@ class WorldStateAgent(
         Attempts to identify characters in the given text.
         """
 
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateCharacterIdentificationResponse
-            
-            result = await self.request_with_instructor(
-                "identify-characters",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "text": text,
-                },
-                response_model=WorldStateCharacterIdentificationResponse,
-                kind="analyze",
-                max_tokens=getattr(self.client, 'max_token_length', 2048),
-            )
-            
-            # Extract data from structured response
-            if isinstance(result, WorldStateCharacterIdentificationResponse):
-                data = {"characters": result.characters}
-            else:
-                data = result
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            _, data = await Prompt.request(
-                "world_state.identify-characters",
-                self.client,
-                "analyze",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "text": text,
-                },
-            )
+        from talemate.client.instructor_models import WorldStateCharacterIdentificationResponse
+        
+        result = await self.request_with_instructor(
+            "identify-characters",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "text": text,
+            },
+            response_model=WorldStateCharacterIdentificationResponse,
+            kind="analyze",
+            max_tokens=getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+        )
+        
+        # Extract data from structured response
+        if isinstance(result, WorldStateCharacterIdentificationResponse):
+            data = {"characters": result.characters}
+        else:
+            data = result
 
         log.debug("identify_characters", text=text, data=data)
 
@@ -696,56 +575,30 @@ class WorldStateAgent(
         Attempts to extract a character sheet from the given text.
         """
 
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateCharacterSheetResponse
-            
-            result = await self.request_with_instructor(
-                "extract-character-sheet",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "text": text,
-                    "name": name,
-                    "character": self.scene.get_character(name),
-                    "alteration_instructions": alteration_instructions or "",
-                    "augmentation_instructions": augmentation_instructions or "",
-                },
-                response_model=WorldStateCharacterSheetResponse,
-                kind="create",
-                max_tokens=getattr(self.client, 'max_token_length', 2048),
-            )
-            
-            # Extract attributes from structured response
-            if isinstance(result, WorldStateCharacterSheetResponse):
-                return result.attributes
-            else:
-                # If not structured, parse as before
-                return self._parse_character_sheet(result)
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            response = await Prompt.request(
-                "world_state.extract-character-sheet",
-                self.client,
-                "create",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "text": text,
-                    "name": name,
-                    "character": self.scene.get_character(name),
-                    "alteration_instructions": alteration_instructions or "",
-                    "augmentation_instructions": augmentation_instructions or "",
-                },
-            )
-
-            # loop through each line in response and if it contains a : then extract
-            # the left side as an attribute name and the right side as the value
-            #
-            # break as soon as a non-empty line is found that doesn't contain a :
-
-            return self._parse_character_sheet(response)
+        from talemate.client.instructor_models import WorldStateCharacterSheetResponse
+        
+        result = await self.request_with_instructor(
+            "extract-character-sheet",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "text": text,
+                "name": name,
+                "character": self.scene.get_character(name),
+                "alteration_instructions": alteration_instructions or "",
+                "augmentation_instructions": augmentation_instructions or "",
+            },
+            response_model=WorldStateCharacterSheetResponse,
+            kind="create",
+            max_tokens=getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+        )
+        
+        # Extract attributes from structured response
+        if isinstance(result, WorldStateCharacterSheetResponse):
+            return result.attributes
+        else:
+            # If not structured, parse as before
+            return self._parse_character_sheet(result)
 
     @set_processing
     async def update_reinforcements(self, force: bool = False, reset: bool = False):
@@ -792,56 +645,33 @@ class WorldStateAgent(
         else:
             kind = "analyze_freeform"
 
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStateReinforcementResponse
-            
-            result = await self.request_with_instructor(
-                "update-reinforcements",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "question": reinforcement.question,
-                    "instructions": reinforcement.instructions or "",
-                    "character": (
-                        self.scene.get_character(reinforcement.character)
-                        if reinforcement.character
-                        else None
-                    ),
-                    "answer": (reinforcement.answer if not reset else None) or "",
-                    "reinforcement": reinforcement,
-                },
-                response_model=WorldStateReinforcementResponse,
-                kind=kind,
-                max_tokens=getattr(self.client, 'max_token_length', 2048),
-            )
-            
-            # Extract answer from structured response
-            if isinstance(result, WorldStateReinforcementResponse):
-                answer = result.answer
-            else:
-                answer = result
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            answer = await Prompt.request(
-                "world_state.update-reinforcements",
-                self.client,
-                kind,
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "question": reinforcement.question,
-                    "instructions": reinforcement.instructions or "",
-                    "character": (
-                        self.scene.get_character(reinforcement.character)
-                        if reinforcement.character
-                        else None
-                    ),
-                    "answer": (reinforcement.answer if not reset else None) or "",
-                    "reinforcement": reinforcement,
-                },
-            )
+        from talemate.client.instructor_models import WorldStateReinforcementResponse
+        
+        result = await self.request_with_instructor(
+            "update-reinforcements",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "question": reinforcement.question,
+                "instructions": reinforcement.instructions or "",
+                "character": (
+                    self.scene.get_character(reinforcement.character)
+                    if reinforcement.character
+                    else None
+                ),
+                "answer": (reinforcement.answer if not reset else None) or "",
+                "reinforcement": reinforcement,
+            },
+            response_model=WorldStateReinforcementResponse,
+            kind=kind,
+            max_tokens=getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+        )
+        
+        # Extract answer from structured response
+        if isinstance(result, WorldStateReinforcementResponse):
+            answer = result.answer
+        else:
+            answer = result
 
         # sequential reinforcment should be single sentence so we
         # split on line breaks and take the first line in case the
@@ -905,42 +735,26 @@ class WorldStateAgent(
 
         first_entry_id = list(pins_with_condition.keys())[0]
 
-        # Try clean prompt system first
-        try:
-            from talemate.client.instructor_models import WorldStatePinConditionResponse
-            
-            result = await self.request_with_instructor(
-                "check-pin-conditions",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": getattr(self.client, 'max_token_length', 2048),
-                    "previous_states": json.dumps(pins_with_condition, indent=2),
-                    "coercion": {first_entry_id: {"condition": ""}},
-                },
-                response_model=WorldStatePinConditionResponse,
-                kind="analyze",
-                max_tokens=getattr(self.client, 'max_token_length', 2048),
-            )
-            
-            # Extract conditions from structured response
-            if isinstance(result, WorldStatePinConditionResponse):
-                answers = result.conditions
-            else:
-                answers = result
-                
-        except Exception as e:
-            # Fallback to legacy prompt system
-            _, answers = await Prompt.request(
-                "world_state.check-pin-conditions",
-                self.client,
-                "analyze",
-                vars={
-                    "scene": self.scene,
-                    "max_tokens": self.client.max_token_length,
-                    "previous_states": json.dumps(pins_with_condition, indent=2),
-                    "coercion": {first_entry_id: {"condition": ""}},
-                },
-            )
+        from talemate.client.instructor_models import WorldStatePinConditionResponse
+        
+        result = await self.request_with_instructor(
+            "check-pin-conditions",
+            vars={
+                "scene": self.scene,
+                "max_tokens": getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+                "previous_states": json.dumps(pins_with_condition, indent=2),
+                "coercion": {first_entry_id: {"condition": ""}},
+            },
+            response_model=WorldStatePinConditionResponse,
+            kind="analyze",
+            max_tokens=getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+        )
+        
+        # Extract conditions from structured response
+        if isinstance(result, WorldStatePinConditionResponse):
+            answers = result.conditions
+        else:
+            answers = result
 
         world_state = self.scene.world_state
         state_change = False

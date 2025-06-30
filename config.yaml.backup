@@ -1,0 +1,273 @@
+agents:
+  conversation:
+    enabled: true
+  creator:
+    enabled: true
+  director:
+    enabled: true
+  editor:
+    enabled: true
+  memory:
+    actions:
+      _config:
+        config:
+          device:
+            value: cpu
+          embeddings:
+            value: default
+        enabled: true
+    enabled: true
+    name: memory
+  narrator:
+    enabled: true
+  summarizer:
+    enabled: true
+  tts:
+    actions:
+      _config:
+        config:
+          api:
+            value: tts
+          generate_chunks:
+            value: false
+          generate_for_narration:
+            value: true
+          generate_for_npc:
+            value: true
+          generate_for_player:
+            value: false
+          voice_id:
+            value: default
+        enabled: true
+      openai:
+        config:
+          model:
+            value: tts-1
+        enabled: true
+    enabled: true
+    name: tts
+  visual:
+    enabled: true
+  world_state:
+    enabled: true
+anthropic: {}
+appearance:
+  scene:
+    character_messages:
+      bold: false
+      italic: false
+    context_investigation_messages:
+      bold: false
+      italic: false
+      show: true
+    director_messages:
+      bold: false
+      italic: false
+      show: true
+    narrator_messages:
+      bold: false
+      italic: true
+    time_messages:
+      bold: false
+      italic: false
+clients:
+  OpenRouter - deepseek/deepseek-r1:
+    enabled: true
+    max_token_length: 65536
+    model: deepseek/deepseek-r1
+    name: OpenRouter - deepseek/deepseek-r1
+    preset_group: ''
+    system_prompts: {}
+    type: openrouter
+cohere: {}
+coqui: {}
+creator:
+  content_context:
+  - a fun and engaging slice of life story
+  - a terrifying horror story
+  - a thrilling action story
+  - a mysterious adventure
+  - an epic sci-fi adventure
+deepseek: {}
+elevenlabs:
+  model: eleven_turbo_v2
+game:
+  default_player_character:
+    color: '#3362bb'
+    description: ''
+    gender: ''
+    name: ''
+  general:
+    add_default_character: true
+    auto_progress: true
+    auto_save: true
+    max_backscroll: 512
+  world_state:
+    templates:
+      state_reinforcement: {}
+google: {}
+groq: {}
+litellm_providers:
+  802be79f-8aa0-4559-beaf-36e543a72721:
+    api_base: https://openrouter.ai/api/v1
+    api_key: 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
+    app_name: ''
+    provider_id: openrouter
+    site_url: ''
+mistralai: {}
+model_configs:
+  7f82ae37-b412-4706-848b-a3bfd9ee3070:
+    created_at: '2025-06-28 23:35:14.178062'
+    id: 7f82ae37-b412-4706-848b-a3bfd9ee3070
+    model:
+      capabilities:
+        function_calling: true
+        reasoning: true
+        vision: false
+        web_search: false
+      display_name: Deepseek R1 (05-28)
+      full_name: openrouter/deepseek/deepseek-r1
+      name: deepseek/deepseek-r1
+    name: Deepseek R1 (05-28) Config
+    parameters:
+      audio: ''
+      extra_headers: ''
+      frequency_penalty: 0
+      function_call: ''
+      functions: ''
+      logit_bias: {}
+      logprobs: false
+      max_completion_tokens: 1024
+      max_retries: 100
+      max_tokens: 2048
+      modalities: ''
+      n: 1
+      parallel_tool_calls: ''
+      prediction: ''
+      presence_penalty: 0
+      response_format: text
+      seed: null
+      stop: []
+      stream: false
+      stream_options: ''
+      temperature: 0.7
+      tool_choice: auto
+      tools: ''
+      top_logprobs: 0
+      top_p: 1
+      web_search_options: ''
+    provider:
+      provider_id: 802be79f-8aa0-4559-beaf-36e543a72721
+      provider_name: OpenRouter
+    updated_at: '2025-06-28 23:35:14.178069'
+model_presets: {}
+openai: {}
+openrouter:
+  api_key: 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
+presets:
+  embeddings:
+    Alibaba-NLP/gte-base-en-v1.5:
+      custom: false
+      device: cpu
+      distance: 1.0
+      distance_function: cosine
+      distance_mod: 1
+      embeddings: sentence-transformer
+      fast: true
+      gpu_recommendation: false
+      local: true
+      model: Alibaba-NLP/gte-base-en-v1.5
+      trust_remote_code: true
+    default:
+      custom: false
+      device: cpu
+      distance: 1.5
+      distance_function: l2
+      distance_mod: 1
+      embeddings: sentence-transformer
+      fast: true
+      gpu_recommendation: false
+      local: true
+      model: all-MiniLM-L6-v2
+      trust_remote_code: false
+    hkunlp/instructor-base:
+      custom: false
+      device: cpu
+      distance: 1.0
+      distance_function: l2
+      distance_mod: 1
+      embeddings: instructor
+      fast: true
+      gpu_recommendation: false
+      local: true
+      model: hkunlp/instructor-base
+      trust_remote_code: false
+    hkunlp/instructor-large:
+      custom: false
+      device: cpu
+      distance: 1.0
+      distance_function: l2
+      distance_mod: 1
+      embeddings: instructor
+      fast: false
+      gpu_recommendation: true
+      local: true
+      model: hkunlp/instructor-large
+      trust_remote_code: false
+    hkunlp/instructor-xl:
+      custom: false
+      device: cpu
+      distance: 1.0
+      distance_function: l2
+      distance_mod: 1
+      embeddings: instructor
+      fast: false
+      gpu_recommendation: true
+      local: true
+      model: hkunlp/instructor-xl
+      trust_remote_code: false
+    openai:
+      custom: false
+      device: cpu
+      distance: 1.0
+      distance_function: l2
+      distance_mod: 1
+      embeddings: openai
+      fast: true
+      gpu_recommendation: false
+      local: false
+      model: text-embedding-3-small
+      trust_remote_code: false
+  inference_groups: {}
+recent_scenes:
+  max_entries: 10
+  scenes:
+  - cover_image:
+      file_type: png
+      id: 7c6ae3e9cb58a9226513d5ce1e335b524c6c59e54793c94f707bdb8b25053c4f
+      media_type: image/png
+    date: '2025-06-30T16:08:02.915516'
+    filename: the-simulation-suite.json
+    name: Simulation Suite V2
+    path: /home/ztripez/Documents/code/sides/talemate/scenes/simulation-suite-v2/the-simulation-suite.json
+  - cover_image:
+      file_type: png
+      id: 52b1388ed6f77a43981bd27e05df54f16e12ba8de1c48f4b9bbcb138fa7367df
+      media_type: image/png
+    date: '2025-06-28T20:26:26.504605'
+    filename: infinity-quest.json
+    name: Infinity Quest
+    path: /home/ztripez/Documents/code/sides/talemate/scenes/infinity-quest/infinity-quest.json
+  - cover_image:
+      file_type: png
+      id: e7c712a0b276342d5767ba23806b03912d10c7c4b82dd1eec0056611e2cd5404
+      media_type: image/png
+    date: '2025-06-25T18:01:36.724601'
+    filename: infinity-quest.json
+    name: Infinity Quest Dynamic Story
+    path: /home/ztripez/Documents/code/sides/talemate/scenes/infinity-quest-dynamic-story-v2/infinity-quest.json
+runpod: {}
+tts:
+  device: cuda
+  model: tts_models/multilingual/multi-dataset/xtts_v2
+  voices: []

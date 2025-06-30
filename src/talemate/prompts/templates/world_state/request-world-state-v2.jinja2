@@ -52,6 +52,32 @@ No dialogue so far
 {% endif -%}
 <|CLOSE_SECTION|>
 <|SECTION:TASK|>
+{% if is_r1_model -%}
+Analyze the current scene and extract world state information about characters and their current conditions.
+
+**Important for R1 models:**
+- Respond with ONLY the JSON structure requested
+- Do not include thinking, reasoning, or explanations
+- Keep the structure simple and flat
+
+**Guidelines:**
+- Focus on character emotions and current activities
+- Note important items and their states
+- Identify the current location
+- Keep descriptions concise
+
+**Example response format:**
+```json
+{
+  "summary": "Brief description of current world state",
+  "characters": ["character1", "character2"],
+  "location": "current location",
+  "items": ["item1", "item2"]
+}
+```
+
+Generate your JSON response:
+{% else -%}
 Create a JSON object for the world state that reflects the scene progression so far.
 
 The world state needs to include important concrete and material items present in the scene during line {{ final_line_number }}.
@@ -68,6 +94,7 @@ Required response: a complete and valid {{ data_format_type() }} response accord
 characters should have the following attributes: `emotion`, `snapshot`
 items should have the following attributes: `snapshot`
 item keys must be reader friendly, so "Item name" instead of "item_name".
+{% endif %}
 
 <|CLOSE_SECTION|>
 <|SECTION:UPDATED WORLD STATE|>

@@ -1,0 +1,49 @@
+{% set rendered_context_content -%}
+## Character: {{ character.name }}
+
+### Current Attributes
+{{ character.sheet }}
+
+{% for n,v in character.details.items() %}
+{{ n }}: {{ v }}
+{% endfor %}
+
+### Current Description
+{{ character.description }}
+{%- endset %}
+{{ rendered_context_content }}
+
+{% set rendered_context_tokens = count_tokens(rendered_context_content) -%}
+{% set scene_history = scene.context_history(budget=max_tokens-512-rendered_context_tokens, keep_context_investigation=False) -%}
+
+## Recent Story Context
+{% for scene_context in scene_history -%}
+{{ scene_context }}
+
+{% endfor -%}
+
+## Task
+
+Analyze {{ character.name }}'s character development based on recent story events. Identify any MAJOR character developments that are not yet reflected in their current character sheet and description.
+
+{% if instructions %}{{ instructions }}{% endif %}
+
+**Important Guidelines:**
+- You are limited to {{ max_changes }} {% if max_changes == 1 %}change{% else %}changes{% endif %}
+- Focus on significant developments, not minor details
+- Base recommendations only on what has happened in the story
+- Ensure recommendations are nuanced and multidimensional
+- The description and attributes may be out of sync - prioritize updating attributes if they lag behind the description
+- Do not make the character one-dimensional
+
+**Response Format:**
+Provide structured actions for character development using the following categories:
+- **add_attributes**: New attributes to add (with name, value, and generation instructions)
+- **update_attributes**: Existing attributes to update (with name, new value, and update instructions)  
+- **remove_attributes**: Attributes to remove (with name and reason)
+- **update_description**: New description if major changes warrant it (with update instructions)
+- **reasoning**: Brief explanation of your recommendations
+
+**Definitions:**
+- **ATTRIBUTE**: A short, concise description of a character trait, attribute, or skill (1 paragraph)
+- **DESCRIPTION**: A general overview of who the character is, what they want, and how they act (multiple paragraphs)

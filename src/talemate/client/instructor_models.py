@@ -133,3 +133,67 @@ class WorldStatePinConditionResponse(BaseModel):
         description="Pin conditions with their updated states",
         default_factory=dict
     )
+
+
+class AttributeAction(BaseModel):
+    """Represents an action to add or update a character attribute."""
+    name: str = Field(description="Name of the attribute")
+    value: str = Field(description="Value or description of the attribute")
+    instructions: str = Field(description="Instructions for generating or updating this attribute")
+
+
+class RemoveAction(BaseModel):
+    """Represents an action to remove a character attribute."""
+    name: str = Field(description="Name of the attribute to remove")
+    reason: str = Field(description="Reason for removing this attribute")
+
+
+class CharacterDevelopmentResponse(BaseModel):
+    """Structured response for character development actions."""
+    add_attributes: List[AttributeAction] = Field(
+        default_factory=list,
+        description="Attributes to add to the character"
+    )
+    update_attributes: List[AttributeAction] = Field(
+        default_factory=list, 
+        description="Attributes to update for the character"
+    )
+    remove_attributes: List[RemoveAction] = Field(
+        default_factory=list,
+        description="Attributes to remove from the character"
+    )
+    update_description: Optional[str] = Field(
+        default=None,
+        description="New character description if it should be updated"
+    )
+    reasoning: Optional[str] = Field(
+        default=None,
+        description="Reasoning behind the suggested changes"
+    )
+
+
+# Simplified response models for R1 compatibility
+class SimpleWorldStateResponse(BaseModel):
+    """Simplified world state response for R1 models (avoids nested dicts)."""
+    summary: str = Field(description="Simple world state summary")
+    characters: List[str] = Field(default_factory=list, description="Character names mentioned")
+    location: Optional[str] = Field(default=None, description="Current location")
+    items: List[str] = Field(default_factory=list, description="Important items mentioned")
+
+
+class SimpleNarratorResponse(BaseModel):
+    """Simplified narrator response for R1 models."""
+    narration: str = Field(description="The main narrative text")
+    mood: Optional[str] = Field(default=None, description="Overall mood or atmosphere")
+
+
+class SimpleDirectorResponse(BaseModel):
+    """Simplified director response for R1 models."""
+    guidance: str = Field(description="The guidance text")
+    focus: Optional[str] = Field(default=None, description="Main focus area")
+
+
+class SimpleCreatorResponse(BaseModel):
+    """Simplified creator response for R1 models."""
+    content: str = Field(description="The generated content")
+    content_type: Optional[str] = Field(default=None, description="Type of content")

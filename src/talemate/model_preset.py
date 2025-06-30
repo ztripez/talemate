@@ -79,6 +79,38 @@ class ModelPreset:
         model_config = ModelConfig.from_config_data(config_id, model_config_data)
         return cls(model_config=model_config)
     
+    @classmethod
+    def from_preset_config(cls, preset_config) -> 'ModelPreset':
+        """Create ModelPreset from ModelPresetConfig"""
+        # Create ModelConfig from the config data
+        model_config = ModelConfig(
+            config_id=preset_config.config_id,
+            provider_name=preset_config.provider_name,
+            model_name=preset_config.model_name,
+            model_full_name=preset_config.model_full_name,
+            provider_instance_id=preset_config.provider_instance_id,
+            capabilities=preset_config.capabilities,
+            parameters=preset_config.parameters,
+            max_context_size=preset_config.max_context_size
+        )
+        
+        # Create ModelPreset with customizations
+        return cls(
+            model_config=model_config,
+            system_prompts=preset_config.system_prompts,
+            double_coercion=preset_config.double_coercion or ""
+        )
+    
+    def to_preset_config(self):
+        """Convert ModelPreset to ModelPresetConfig"""
+        from talemate.config import ModelPresetConfig
+        return ModelPresetConfig(
+            **self.model_config.__dict__,
+            double_coercion=self.double_coercion,
+            system_prompts=self.system_prompts,
+            enabled=True
+        )
+    
     def get_provider_instance(self, config):
         """Get or create the LiteLLM provider instance"""
         if self._provider_instance is None:
@@ -330,16 +362,25 @@ class ModelPreset:
         # Render prompt text
         prompt_text = prompt.render()
         
-        # Get coercion/prefill text
+        # Get coercion/prefill text and clean it
         coercion = kwargs.get('coercion_message') or self.get_coercion_text()
+        if coercion:
+            # Critical: Remove trailing whitespace to prevent Claude from ignoring prefill
+            coercion = coercion.rstrip()
         
         # Check if we should use legacy model formatting or modern chat format
         if self._should_use_legacy_formatting():
             # Use existing model formatting system for backward compatibility
             from talemate.client.model_prompts import model_prompt
+            
+            # For legacy system, also add reinforcement to system message if coercion is used
+            enhanced_system_message = system_message
+            if coercion:
+                enhanced_system_message += "\n\nIMPORTANT: You must continue exactly from the assistant message provided, without repeating or acknowledging it. The response must start exactly where the prefill ends."
+            
             formatted_prompt, _ = model_prompt(
                 self.model_name,
-                system_message,
+                enhanced_system_message,
                 prompt_text,
                 double_coercion=coercion
             )
@@ -347,9 +388,14 @@ class ModelPreset:
             # For legacy formatting, send as single user message
             messages = [{"role": "user", "content": formatted_prompt}]
         else:
+            # Add prefill reinforcement to system message if coercion is used
+            enhanced_system_message = system_message
+            if coercion:
+                enhanced_system_message += "\n\nIMPORTANT: You must continue exactly from the assistant message provided, without repeating or acknowledging it. The response must start exactly where the prefill ends."
+            
             # Use modern chat message format
             messages = [
-                {"role": "system", "content": system_message},
+                {"role": "system", "content": enhanced_system_message},
                 {"role": "user", "content": prompt_text}
             ]
             

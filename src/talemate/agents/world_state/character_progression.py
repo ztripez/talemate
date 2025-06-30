@@ -6,14 +6,11 @@ from talemate.agents.base import (
     AgentAction,
     AgentActionConfig
 )
-from talemate.prompts import Prompt
 from talemate.instance import get_agent
 from talemate.events import GameLoopEvent
-from talemate.status import set_loading
 from talemate.emit import emit
 
 import talemate.emit.async_signals
-import talemate.game.focal as focal
 import talemate.world_state.templates as world_state_templates
 from talemate.world_state.manager import WorldStateManager
 from talemate.world_state import Suggestion
@@ -127,7 +124,7 @@ class CharacterProgressionMixin:
             if character.is_player and not self.character_progression_player_character:
                 continue
             
-            calls:list[focal.Call] = await self.determine_character_development(character)
+            calls:list[dict] = await self.determine_character_development(character)
             await self.character_progression_process_calls(
                 character = character,
                 calls = calls,
@@ -137,7 +134,7 @@ class CharacterProgressionMixin:
     # methods
     
     @set_processing
-    async def character_progression_process_calls(self, character:"Character", calls:list[focal.Call], as_suggestions:bool=True):
+    async def character_progression_process_calls(self, character:"Character", calls:list[dict], as_suggestions:bool=True):
         
         world_state_manager:WorldStateManager = self.scene.world_state_manager
         if as_suggestions:
@@ -152,12 +149,12 @@ class CharacterProgressionMixin:
         else:
             for call in calls:
                 # changes will be applied directly to the character
-                if call.name in ["add_attribute", "update_attribute"]:
-                    await character.set_base_attribute(call.arguments["name"], call.result)
-                elif call.name == "remove_attribute":
-                    await character.set_base_attribute(call.arguments["name"], None)
-                elif call.name == "update_description":
-                    await character.set_description(call.result)
+                if call["name"] in ["add_attribute", "update_attribute"]:
+                    await character.set_base_attribute(call["arguments"]["name"], call["result"])
+                elif call["name"] == "remove_attribute":
+                    await character.set_base_attribute(call["arguments"]["name"], None)
+                elif call["name"] == "update_description":
+                    await character.set_description(call["result"])
                 
     @set_processing
     async def determine_character_development(
@@ -165,99 +162,96 @@ class CharacterProgressionMixin:
         character: "Character",
         generation_options: world_state_templates.GenerationOptions | None = None,
         instructions: str = None,
-    ) -> list[focal.Call]:
+    ) -> list[dict]:
         """
-        Determine character development
+        Determine character development using clean prompt system
         """
         
         log.debug("determine_character_development", character=character, generation_options=generation_options)
         
+        from talemate.client.instructor_models import CharacterDevelopmentResponse
+        
+        # Use clean prompt system with structured output
+        response = await self.request_with_instructor(
+            "determine-character-development-clean",
+            vars={
+                "character": character,
+                "scene": self.scene,
+                "instructions": instructions or "",
+                "max_changes": self.character_progression_max_changes,
+                "generation_options": generation_options,
+            },
+            response_model=CharacterDevelopmentResponse,
+            kind="analyze_freeform",
+            max_tokens=getattr(self.client, 'max_token_length', 2048) if self.client else 2048,
+        )
+        
+        # Convert structured response to legacy call format for compatibility
+        calls = []
         creator = get_agent("creator")
         
-        @set_loading("Generating character attribute", cancellable=True)
-        async def add_attribute(name: str, instructions: str) -> str:
-            return await creator.generate_character_attribute(
-                character,
-                attribute_name = name,
-                instructions = instructions,
-                generation_options = generation_options,
-            )
-            
-        @set_loading("Generating character attribute", cancellable=True)
-        async def update_attribute(name: str, instructions: str) -> str:
-            return await creator.generate_character_attribute(
-                character,
-                attribute_name = name,
-                instructions = instructions,
-                original = character.base_attributes.get(name),
-                generation_options = generation_options,
-            )
+        # Process add_attributes
+        for action in response.add_attributes:
+            try:
+                result = await creator.generate_character_attribute(
+                    character,
+                    attribute_name=action.name,
+                    instructions=action.instructions,
+                    generation_options=generation_options,
+                )
+                calls.append({
+                    "name": "add_attribute",
+                    "arguments": {"name": action.name, "instructions": action.instructions},
+                    "result": result
+                })
+            except Exception as e:
+                log.error("Error generating add_attribute", error=e, action=action)
         
-        async def remove_attribute(name: str, reason:str) -> str:
-            return None
-            
-        @set_loading("Generating character description", cancellable=True)
-        async def update_description(instructions: str) -> str:
-            return await creator.generate_character_detail(
-                character,
-                detail_name = "description",
-                instructions = instructions,
-                original = character.description,
-                length=1024,
-                generation_options = generation_options,
-            )
-                 
-        focal_handler = focal.Focal(
-            self.client,
-            
-            # callbacks
-            callbacks = [
-                focal.Callback(
-                    name = "add_attribute",
-                    arguments = [
-                        focal.Argument(name="name", type="str"),
-                        focal.Argument(name="instructions", type="str"),
-                    ],
-                    fn = add_attribute
-                ),
-                focal.Callback(
-                    name = "update_attribute",
-                    arguments = [
-                        focal.Argument(name="name", type="str"),
-                        focal.Argument(name="instructions", type="str"),
-                    ],
-                    fn = update_attribute
-                ),
-                focal.Callback(
-                    name = "remove_attribute",
-                    arguments = [
-                        focal.Argument(name="name", type="str"),
-                        focal.Argument(name="reason", type="str"),
-                    ],
-                    fn = remove_attribute
-                ),
-                focal.Callback(
-                    name = "update_description",
-                    arguments = [
-                        focal.Argument(name="instructions", type="str"),
-                    ],
-                    fn = update_description,
-                    multiple=False
-                ),
-            ],
-            
-            max_calls = self.character_progression_max_changes,
-            
-            # context
-            character = character,
-            scene = self.scene,
-            instructions = instructions,
-        )
+        # Process update_attributes
+        for action in response.update_attributes:
+            try:
+                result = await creator.generate_character_attribute(
+                    character,
+                    attribute_name=action.name,
+                    instructions=action.instructions,
+                    original=character.base_attributes.get(action.name),
+                    generation_options=generation_options,
+                )
+                calls.append({
+                    "name": "update_attribute",
+                    "arguments": {"name": action.name, "instructions": action.instructions},
+                    "result": result
+                })
+            except Exception as e:
+                log.error("Error generating update_attribute", error=e, action=action)
         
-        await focal_handler.request(
-            "world_state.determine-character-development",
-        )
+        # Process remove_attributes
+        for action in response.remove_attributes:
+            calls.append({
+                "name": "remove_attribute",
+                "arguments": {"name": action.name, "reason": action.reason},
+                "result": None
+            })
         
-        log.debug("determine_character_development", calls=focal_handler.state.calls)
+        # Process description update
+        if response.update_description:
+            try:
+                result = await creator.generate_character_detail(
+                    character,
+                    detail_name="description",
+                    instructions=response.update_description,
+                    original=character.description,
+                    length=1024,
+                    generation_options=generation_options,
+                )
+                calls.append({
+                    "name": "update_description",
+                    "arguments": {"instructions": response.update_description},
+                    "result": result
+                })
+            except Exception as e:
+                log.error("Error generating description update", error=e)
         
-        return focal_handler.state.calls
+        log.debug("determine_character_development", calls=calls)
+        
+        return calls
