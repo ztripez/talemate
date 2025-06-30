@@ -112,6 +112,9 @@ class ModelPrompt:
 
         if not double_coercion:
             double_coercion = ""
+        else:
+            # Critical: Remove trailing whitespace to prevent Claude from ignoring prefill
+            double_coercion = double_coercion.rstrip()
 
         if "<|BOT|>" not in prompt and double_coercion:
             prompt = f"{prompt}<|BOT|>"

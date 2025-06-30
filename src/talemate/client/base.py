@@ -395,8 +395,10 @@ class ClientBase:
         json_coercion = "<|BOT|>{" in prompt
 
         if self.can_be_coerced and self.double_coercion and not json_coercion:
-            double_coercion = self.double_coercion
-            double_coercion = f"{double_coercion}\n\n"
+            # Critical: Remove trailing whitespace to prevent Claude from ignoring prefill
+            double_coercion = self.double_coercion.rstrip()
+            # Add reinforcement to system message when prefill is used
+            sys_msg += "\n\nIMPORTANT: You must continue exactly from the assistant message provided, without repeating or acknowledging it. The response must start exactly where the prefill ends."
         else:
             double_coercion = None
 
@@ -417,7 +419,9 @@ class ClientBase:
             _, right = prompt.split("<|BOT|>", 1)
             
             if self.double_coercion:
-                right = f"{self.double_coercion}\n\n{right}"
+                # Critical: Remove trailing whitespace to prevent Claude from ignoring prefill
+                cleaned_coercion = self.double_coercion.rstrip()
+                right = f"{cleaned_coercion}{right}"
             
             return prompt, right
         return prompt, None
