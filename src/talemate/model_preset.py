@@ -82,6 +82,10 @@ class ModelPreset:
     @classmethod
     def from_preset_config(cls, preset_config) -> 'ModelPreset':
         """Create ModelPreset from ModelPresetConfig"""
+        log.info("from_preset_config called", 
+                 config_id=preset_config.config_id, 
+                 double_coercion=preset_config.double_coercion)
+        
         # Create ModelConfig from the config data
         model_config = ModelConfig(
             config_id=preset_config.config_id,
@@ -94,20 +98,45 @@ class ModelPreset:
             max_context_size=preset_config.max_context_size
         )
         
-        # Create ModelPreset with customizations
-        return cls(
+        # Ensure system_prompts is valid - fix corrupted data  
+        system_prompts = preset_config.system_prompts
+        if isinstance(system_prompts, str):
+            # If it's a corrupted string, convert to empty dict
+            system_prompts = {}
+        elif not isinstance(system_prompts, dict):
+            # If it's not a dict, use empty dict
+            system_prompts = {}
+        
+        # Create ModelPreset with customizations - preserve double_coercion exactly as is
+        result = cls(
             model_config=model_config,
-            system_prompts=preset_config.system_prompts,
-            double_coercion=preset_config.double_coercion or ""
+            system_prompts=system_prompts,
+            double_coercion=preset_config.double_coercion if preset_config.double_coercion is not None else ""
         )
+        
+        log.info("from_preset_config result", 
+                 config_id=result.config_id, 
+                 double_coercion=result.double_coercion)
+        
+        return result
     
     def to_preset_config(self):
         """Convert ModelPreset to ModelPresetConfig"""
         from talemate.config import ModelPresetConfig
+        
+        # Ensure system_prompts is valid - fix corrupted data
+        system_prompts = self.system_prompts
+        if isinstance(system_prompts, str):
+            # If it's a corrupted string, convert to empty dict
+            system_prompts = {}
+        elif not isinstance(system_prompts, dict):
+            # If it's not a dict, use empty dict
+            system_prompts = {}
+            
         return ModelPresetConfig(
             **self.model_config.__dict__,
             double_coercion=self.double_coercion,
-            system_prompts=self.system_prompts,
+            system_prompts=system_prompts,
             enabled=True
         )
     

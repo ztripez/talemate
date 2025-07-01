@@ -455,7 +455,6 @@
                                         >
                                             Browse Models
                                         </v-btn>
-                                        <ChatTest @notify="handleNotification" />
                                     </div>
                                     
                                     <v-progress-linear v-if="loadingProviders" indeterminate color="primary" class="mb-4"></v-progress-linear>
@@ -628,6 +627,7 @@
     <ModelSelector
         v-model="showModelSelector"
         @modelSelected="onModelSelected"
+        @presetSaved="onPresetSaved"
     />
 </template>
 <script>
@@ -785,6 +785,10 @@ export default {
                     }
                 }
             }
+        },
+        openModelBrowser() {
+            // Open the model browser directly without opening the config dialog
+            this.showModelSelector = true;
         },
         exit() {
             this.dialog = false
@@ -1088,6 +1092,10 @@ export default {
             console.log('Selected model:', model);
             // TODO: Implement model selection logic
             // This could emit an event or store the selected model
+        },
+        onPresetSaved() {
+            // Emit event to parent to refresh preset listing
+            this.$emit('preset-saved');
         },
 
     },

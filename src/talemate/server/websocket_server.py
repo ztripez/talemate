@@ -425,7 +425,7 @@ class WebsocketHandler(Receiver):
                 model_preset = self.model_presets[config_id]
             else:
                 # Create new ModelPreset if it doesn't exist
-                model_config_data = config.model_configs.get(config_id)
+                model_config_data = config.model_presets.get(config_id)
                 if not model_config_data:
                     log.warning(f"No model config found for {config_id}")
                     continue
@@ -824,12 +824,16 @@ class WebsocketHandler(Receiver):
                 "enabled": True,  # ModelPresets are enabled by default
             }
             
+            # Create human-readable display name
+            display_name = f"{model_preset.provider_name} - {model_preset.model_name}"
+            
             self.queue_put(
                 {
                     "type": "model_preset_status",
                     "message": model_preset.provider_name,
                     "model_name": model_preset.model_name,
-                    "name": config_id,
+                    "name": display_name,
+                    "config_id": config_id,  # Keep UUID for backend operations
                     "status": status,
                     "data": preset_data,
                 }

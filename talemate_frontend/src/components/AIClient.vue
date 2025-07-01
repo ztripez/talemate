@@ -1,84 +1,84 @@
 <template>
   <v-list-subheader class="text-uppercase"><v-icon>mdi-tune-variant</v-icon>
     Model Presets
-    <v-btn @click="hideDisabled = !hideDisabled" size="x-small" v-if="numDisabledClients > 0">
+    <v-btn @click="hideDisabled = !hideDisabled" size="x-small" v-if="numDisabledPresets > 0">
       <template v-slot:prepend>
         <v-icon>{{ hideDisabled ? 'mdi-eye' : 'mdi-eye-off' }}</v-icon>
       </template>
-      {{ hideDisabled ? 'Show disabled' : 'Hide disabled' }} ({{ numDisabledClients }})
+      {{ hideDisabled ? 'Show disabled' : 'Hide disabled' }} ({{ numDisabledPresets }})
     </v-btn>
   </v-list-subheader>
   <div v-if="isConnected()">
-    <div v-for="(client, index) in state.clients" :key="index">
-      <v-list density="compact" v-if="client.status !== 'disabled' || !hideDisabled">
+    <div v-for="(preset, index) in state.presets" :key="index">
+      <v-list density="compact" v-if="preset.status !== 'disabled' || !hideDisabled">
         <v-list-item>
           <v-list-item-title>
-            <v-progress-circular v-if="client.status === 'busy'" indeterminate="disable-shrink" color="primary"
+            <v-progress-circular v-if="preset.status === 'busy'" indeterminate="disable-shrink" color="primary"
               size="14"></v-progress-circular>
             
-            <v-icon v-else-if="client.status == 'warning'" color="orange" size="14">mdi-checkbox-blank-circle</v-icon>
-            <v-icon v-else-if="client.status == 'error'" color="red-darken-1" size="14">mdi-checkbox-blank-circle</v-icon>
-            <v-btn v-else-if="client.status == 'disabled'" size="x-small" class="mr-1" variant="tonal" density="comfortable" rounded="sm" @click.stop="toggleClient(client)" icon="mdi-power-standby"></v-btn>
+            <v-icon v-else-if="preset.status == 'warning'" color="orange" size="14">mdi-checkbox-blank-circle</v-icon>
+            <v-icon v-else-if="preset.status == 'error'" color="red-darken-1" size="14">mdi-checkbox-blank-circle</v-icon>
+            <v-btn v-else-if="preset.status == 'disabled'" size="x-small" class="mr-1" variant="tonal" density="comfortable" rounded="sm" @click.stop="togglePreset(preset)" icon="mdi-power-standby"></v-btn>
 
-            <!-- client status icon -->
+            <!-- preset status icon -->
             <v-icon v-else color="green" size="14">mdi-checkbox-blank-circle</v-icon>
 
-            <!-- client name-->
-            <span :class="client.status == 'disabled' ? 'text-grey-darken-2 ml-1' : 'ml-1'"> {{ client.name }}</span>
+            <!-- preset name-->
+            <span :class="preset.status == 'disabled' ? 'text-grey-darken-2 ml-1' : 'ml-1'"> {{ preset.name }}</span>
 
             <!-- request information -->
-            <AIClientRequestInformation :requestInformation="client.request_information" />
+            <AIClientRequestInformation :requestInformation="preset.request_information" />
           </v-list-item-title>
-          <div v-if="client.enabled">
+          <div v-if="preset.enabled">
   
-            <v-list-item-subtitle class="text-caption" v-if="client.data.error_action != null">
-              <v-btn class="mt-1 mb-1" variant="tonal" :prepend-icon="client.data.error_action.icon" size="x-small" color="warning" @click.stop="callErrorAction(client, client.data.error_action)">
-                {{ client.data.error_action.title }}
+            <v-list-item-subtitle class="text-caption" v-if="preset.data.error_action != null">
+              <v-btn class="mt-1 mb-1" variant="tonal" :prepend-icon="preset.data.error_action.icon" size="x-small" color="warning" @click.stop="callErrorAction(preset, preset.data.error_action)">
+                {{ preset.data.error_action.title }}
               </v-btn>
             </v-list-item-subtitle> 
             <v-list-item-subtitle class="text-caption mb-2">
-              {{ client.model_name }}
+              {{ preset.model_name }}
             </v-list-item-subtitle>
             <v-list-item-title class="text-caption">
               <div class="d-flex flex-wrap align-center">
                 <!-- provider name -->
-                <v-chip label size="x-small" color="primary" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-cloud-outline">{{ client.data?.provider_name || client.type }}</v-chip>
+                <v-chip label size="x-small" color="primary" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-cloud-outline">{{ preset.data?.provider_name || preset.type }}</v-chip>
                 <!-- max context size -->
-                <v-chip label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-text-box">{{ client.data?.max_context_size || client.max_token_length }}</v-chip>
+                <v-chip label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-text-box">{{ preset.data?.max_context_size || preset.max_token_length }}</v-chip>
                 <!-- embeddings -->
-                <v-chip v-if="client.embeddings_model_name" label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-cube-unfolded">{{ client.embeddings_model_name }}</v-chip>
+                <v-chip v-if="preset.embeddings_model_name" label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-cube-unfolded">{{ preset.embeddings_model_name }}</v-chip>
                 <!-- override base url -->
-                <v-chip  v-if="client.data.override_base_url" label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-api">{{ client.data.override_base_url }}</v-chip>
+                <v-chip  v-if="preset.data.override_base_url" label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-api">{{ preset.data.override_base_url }}</v-chip>
                 <!-- rate limit -->
-                <v-chip v-if="client.rate_limit" label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-speedometer">{{ client.rate_limit }}/min</v-chip>
+                <v-chip v-if="preset.rate_limit" label size="x-small" color="grey" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-speedometer">{{ preset.rate_limit }}/min</v-chip>
                 <v-menu density="compact">
                   <template v-slot:activator="{ props }">
-                    <v-chip v-bind="props" label size="x-small" color="highlight1" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-tune">{{ client.preset_group || "Default" }}</v-chip>
+                    <v-chip v-bind="props" label size="x-small" color="highlight1" variant="tonal" class="mb-1 mr-1" prepend-icon="mdi-tune">{{ preset.preset_group || "Default" }}</v-chip>
                   </template>
 
                   <v-list density="compact">
-                    <v-list-item prepend-icon="mdi-pencil" @click="openAppConfig('presets', 'inference', client.preset_group)">
-                      <v-list-item-title>Edit {{ client.preset_group || "Default" }} Parameters</v-list-item-title>
+                    <v-list-item prepend-icon="mdi-pencil" @click="openAppConfig('presets', 'inference', preset.preset_group)">
+                      <v-list-item-title>Edit {{ preset.preset_group || "Default" }} Parameters</v-list-item-title>
                     </v-list-item>
-                    <v-list-item prepend-icon="mdi-tune" v-for="preset in availablePresets" :key="preset.value" @click="client.preset_group = preset.value; saveClientDelayed(client)">
-                      <v-list-item-title>{{ preset.title }}</v-list-item-title>
+                    <v-list-item prepend-icon="mdi-tune" v-for="presetOption in availablePresets" :key="presetOption.value" @click="preset.preset_group = presetOption.value; savePresetDelayed(preset)">
+                      <v-list-item-title>{{ presetOption.title }}</v-list-item-title>
                       <v-list-item-subtitle>Assign this preset</v-list-item-subtitle>
                     </v-list-item>
                   </v-list>
                 </v-menu>
 
                 <!-- data format -->
-                <v-chip v-if="client.data_format" label size="x-small" color="grey" variant="tonal" class="mb-1" prepend-icon="mdi-code-json">{{ client.data_format.toUpperCase() }}</v-chip>
+                <v-chip v-if="preset.data_format" label size="x-small" color="grey" variant="tonal" class="mb-1" prepend-icon="mdi-code-json">{{ preset.data_format.toUpperCase() }}</v-chip>
               </div>
             </v-list-item-title>
             <div density="compact">
               <v-slider
                 hide-details
-                v-model="client.max_token_length"
+                v-model="preset.max_token_length"
                 :min="1024"
                 :max="128000"
                 :step="1024"
-                @update:modelValue="updateClientMaxTokenLength(client, $event)"
+                @update:modelValue="updatePresetMaxTokenLength(preset, $event)"
                 @click.stop
                 density="compact"
               ></v-slider>
@@ -86,30 +86,30 @@
             <v-list-item-subtitle class="text-center">
   
               <!-- LLM prompt template warning -->
-              <v-tooltip text="Could not determine LLM prompt template for this model. Using default. You can pick a template manually in the client options and new templates can be added in ./templates/llm-prompt" v-if="client.status === 'idle' && client.data && !client.data.has_prompt_template && client.data.meta.requires_prompt_template" max-width="200">
+              <v-tooltip text="Could not determine LLM prompt template for this model. Using default. You can pick a template manually in the client options and new templates can be added in ./templates/llm-prompt" v-if="preset.status === 'idle' && preset.data && !preset.data.has_prompt_template && preset.data.meta.requires_prompt_template" max-width="200">
                 <template v-slot:activator="{ props }">
                   <v-icon x-size="14" class="mr-1" v-bind="props" color="orange">mdi-alert</v-icon>
                 </template>
               </v-tooltip>
   
               <!-- coercion status -->
-              <v-tooltip :text="(client.data?.double_coercion || client.double_coercion) ? ('Coercion active: ' + (client.data?.double_coercion || client.double_coercion)) : 'No coercion set'" max-width="200">
+              <v-tooltip :text="(preset.data?.double_coercion || preset.double_coercion) ? ('Coercion active: ' + (preset.data?.double_coercion || preset.double_coercion)) : 'No coercion set'" max-width="200">
                 <template v-slot:activator="{ props }">
-                  <v-icon x-size="14" class="mr-1" v-bind="props" :color="(client.data?.double_coercion || client.double_coercion) ? 'primary' : 'grey'">mdi-account-lock-open</v-icon>
+                  <v-icon x-size="14" class="mr-1" v-bind="props" :color="(preset.data?.double_coercion || preset.double_coercion) ? 'primary' : 'grey'">mdi-account-lock-open</v-icon>
                 </template>
               </v-tooltip>
   
               <!-- disable/enable -->
-              <v-tooltip :text="client.enabled ? 'Disable':'Enable'">
+              <v-tooltip :text="preset.enabled ? 'Disable':'Enable'">
                 <template v-slot:activator="{ props }">
-                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="toggleClient(client)" icon="mdi-power-standby"></v-btn>
+                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="togglePreset(preset)" icon="mdi-power-standby"></v-btn>
                 </template>
               </v-tooltip>
   
-              <!-- edit client button -->
-              <v-tooltip text="Edit client">
+              <!-- edit preset button -->
+              <v-tooltip text="Edit preset">
                 <template v-slot:activator="{ props }">
-                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="editClient(index)" icon="mdi-cogs"></v-btn>
+                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="editPreset(index)" icon="mdi-cogs"></v-btn>
   
                 </template>
               </v-tooltip>
@@ -117,14 +117,14 @@
               <!-- assign to all agents button -->
               <v-tooltip text="Assign to all agents">
                 <template v-slot:activator="{ props }">
-                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="assignClientToAllAgents(index)" icon="mdi-transit-connection-variant"></v-btn>
+                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="assignPresetToAllAgents(index)" icon="mdi-transit-connection-variant"></v-btn>
                 </template>
               </v-tooltip>
               
-              <!-- delete the client button -->
-              <v-tooltip text="Delete client">
+              <!-- delete the preset button -->
+              <v-tooltip text="Delete preset">
                 <template v-slot:activator="{ props }">
-                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="deleteClient(index)" icon="mdi-close-thick"></v-btn>
+                  <v-btn size="x-small" class="mr-1" v-bind="props" variant="tonal" density="comfortable" rounded="sm" @click.stop="deletePreset(index)" icon="mdi-close-thick"></v-btn>
                 </template>
               </v-tooltip>
               
@@ -139,11 +139,11 @@
       :formTitle="state.formTitle" 
       :immutable-config="immutableConfig"
       :available-presets="availablePresets"
-      @save="saveClient" 
+      @save="savePreset" 
       @error="propagateError" 
       @update:dialog="updateDialog">
     </ClientModal>
-    <v-alert type="warning" variant="tonal" v-if="state.clients.length === 0">You have no model presets configured. Add one.</v-alert>
+    <v-alert type="warning" variant="tonal" v-if="state.presets.length === 0">You have no model presets configured. Add one.</v-alert>
     <v-btn @click="openModal" elevation="0" prepend-icon="mdi-plus-box">Add Model Preset</v-btn>
   </div>
 </template>
@@ -167,7 +167,7 @@ export default {
       hideDisabled: true,
       clientImmutable: {},
       state: {
-        clients: [],
+        presets: [],
         dialog: false,
         currentClient: {
           name: '',
@@ -209,11 +209,11 @@ export default {
 
       return items;
     },
-    visibleClients: function() {
-      return this.state.clients.filter(client => !this.hideDisabled || client.status !== 'disabled');
+    visiblePresets: function() {
+      return this.state.presets.filter(preset => !this.hideDisabled || preset.status !== 'disabled');
     },
-    numDisabledClients: function() {
-      return this.state.clients.filter(client => client.status === 'disabled').length;
+    numDisabledPresets: function() {
+      return this.state.presets.filter(preset => preset.status === 'disabled').length;
     }
   },
   inject: [
@@ -229,10 +229,10 @@ export default {
     };
   },
   emits: [
-    'clients-updated',
     'model-presets-updated',
     'client-assigned',
     'open-app-config',
+    'open-model-browser',
     'save',
     'error',
   ],
@@ -245,13 +245,13 @@ export default {
     },
 
     configurationRequired() {
-      if(this.state.clients.length === 0) {
+      if(this.state.presets.length === 0) {
         return true;
       }
 
-      // cycle through clients and check if any are status 'error' or 'warning'
-      for (let i = 0; i < this.state.clients.length; i++) {
-        if (this.state.clients[i].status === 'error' || this.state.clients[i].status === 'warning') {
+      // cycle through presets and check if any are status 'error' or 'warning'
+      for (let i = 0; i < this.state.presets.length; i++) {
+        if (this.state.presets[i].status === 'error' || this.state.presets[i].status === 'warning') {
           return true;
         }
       }
@@ -259,40 +259,25 @@ export default {
       return false;
     },
     getActive() {
-      return this.state.clients.find(a => a.status === 'busy');      
+      return this.state.presets.find(a => a.status === 'busy');      
     },
     openModal() {
-      this.state.currentClient = {
-        name: 'TextGenWebUI',
-        type: 'textgenwebui',
-        api_url: 'http://localhost:5000',
-        model_name: '',
-        max_token_length: 8192,
-        data: {
-          has_prompt_template: false,
-        }
-      };
-      this.state.formTitle = 'Add Client';
-      this.state.dialog = true;
+      // Open the model browser instead of the old client form
+      this.$emit('open-model-browser');
     },
     propagateError(error) {
       this.$emit('error', error);
     },
 
-    updateClientMaxTokenLength(client, newValue) {
-      client.max_token_length = newValue;
+    updatePresetMaxTokenLength(preset, newValue) {
+      preset.max_token_length = newValue;
       
-      // For ModelPresets, also update the data field
-      if (client.config_id && client.data) {
-        client.data.max_context_size = newValue;
+      // Also update the data field
+      if (preset.config_id && preset.data) {
+        preset.data.max_context_size = newValue;
       }
       
-      this.saveClientDelayed(client);
-      
-      // Also update the corresponding model config if this client comes from one
-      if (client.model_config_id || client.config_id) {
-        this.updateModelConfigContextSize(client.model_config_id || client.config_id, newValue);
-      }
+      this.savePresetDelayed(preset);
     },
 
     updateModelConfigContextSize(configId, maxContextSize) {
@@ -305,157 +290,118 @@ export default {
       }));
     },
 
-    saveClientDelayed(client) {
-      client.dirty = true;
+    updateModelPreset(client) {
+      // Debug: Log what we're about to send to backend
+      console.log('updateModelPreset - client object:', client);
+      console.log('updateModelPreset - double_coercion value:', client.double_coercion);
+      
+      // Ensure system_prompts is an object, not a string
+      let systemPrompts = client.system_prompts;
+      if (typeof systemPrompts === 'string') {
+        // If it's a string, convert it to an empty object
+        systemPrompts = {};
+      } else if (!systemPrompts || typeof systemPrompts !== 'object') {
+        // If it's null/undefined or not an object, use empty object
+        systemPrompts = {};
+      }
+      
+      // Send model preset update to backend
+      const payload = {
+        type: 'config',
+        action: 'update_model_preset',
+        config_id: client.config_id,
+        double_coercion: client.double_coercion,
+        max_context_size: client.max_token_length,
+        system_prompts: systemPrompts,
+        enabled: client.enabled
+      };
+      
+      console.log('updateModelPreset - sending payload:', payload);
+      this.getWebsocket().send(JSON.stringify(payload));
+    },
+
+    savePresetDelayed(preset) {
+      preset.dirty = true;
       if (this.saveDelayTimeout) {
         clearTimeout(this.saveDelayTimeout);
       }
       this.saveDelayTimeout = setTimeout(() => {
-        this.saveClient(client);
-        client.dirty = false;
+        this.savePreset(preset);
+        preset.dirty = false;
       }, 500);
     },
 
-    saveClient(client) {
-      const index = this.state.clients.findIndex(c => c.name === client.name);
-      if (index === -1) {
-        this.state.clients.push(client);
-      } else {
-        this.state.clients[index] = client;
-      }
-      this.state.dialog = false; // Close the dialog after saving the client
+    savePreset(preset) {
+      // Debug: Log the coercion value being saved
+      console.log('Saving preset - double_coercion:', preset.double_coercion);
       
-      // Emit the appropriate event based on whether this is a ModelPreset or legacy client
-      if (client.config_id) {
-        this.$emit('model-presets-updated', this.state.clients);
+      const index = this.state.presets.findIndex(p => p.config_id === preset.config_id);
+      if (index === -1) {
+        this.state.presets.push(preset);
       } else {
-        this.$emit('clients-updated', this.state.clients);
+        this.state.presets[index] = preset;
       }
+      this.state.dialog = false; // Close the dialog after saving the preset
+      
+      // Clear dirty flag to allow backend updates to be received
+      preset.dirty = false;
+      
+      // Send update to backend
+      this.updateModelPreset(preset);
+      this.$emit('model-presets-updated', this.state.presets);
     },
-    editClient(index) {
-      this.state.currentClient = { ...this.state.clients[index] };
-      this.state.formTitle = 'Edit AI Client';
+    editPreset(index) {
+      console.log('editPreset called - index:', index);
+      console.log('editPreset - preset in array:', this.state.presets[index]);
+      console.log('editPreset - preset coercion value:', this.state.presets[index].double_coercion);
+      
+      this.state.currentClient = { ...this.state.presets[index] };
+      // Ensure compatibility fields for ClientModal
+      this.state.currentClient.can_be_coerced = true; // Model presets can always be coerced
+      
+      // Debug: Log the initial coercion value after copy
+      console.log('Editing preset - after copy double_coercion:', this.state.currentClient.double_coercion);
+      console.log('Editing preset - full currentClient object:', this.state.currentClient);
+      
+      this.state.formTitle = 'Edit Model Preset';
       this.state.dialog = true;
     },
-    deleteClient(index) {
-      if (window.confirm('Are you sure you want to delete this client?')) {
-        this.clientImmutable[this.state.clients[index].name] = true;
-        this.state.clients.splice(index, 1);
-        this.$emit('clients-updated', this.state.clients);
+    deletePreset(index) {
+      if (window.confirm('Are you sure you want to delete this preset?')) {
+        this.clientImmutable[this.state.presets[index].name] = true;
+        this.state.presets.splice(index, 1);
+        this.$emit('model-presets-updated', this.state.presets);
       }
     },
-    assignClientToAllAgents(index) {
+    assignPresetToAllAgents(index) {
       let agents = this.getAgents();
-      let client = this.state.clients[index];
+      let preset = this.state.presets[index];
 
-      this.saveClient(client);
+      this.savePreset(preset);
 
       for (let i = 0; i < agents.length; i++) {
-        agents[i].client = client.name;
-        console.log("Assigning client", client.name, "to agent", agents[i].name);
+        agents[i].client = preset.name;
+        console.log("Assigning preset", preset.name, "to agent", agents[i].name);
       }
       this.$emit('client-assigned', agents);
     },
 
-    toggleClient(client) {
-      console.log("Toggling client", client.enabled, "to", !client.enabled)
-      this.clientImmutable[client.name] = true;
-      client.enabled = !client.enabled;
-      if(client.enabled) {
-        client.status = 'warning';
+    togglePreset(preset) {
+      console.log("Toggling preset", preset.enabled, "to", !preset.enabled)
+      this.clientImmutable[preset.name] = true;
+      preset.enabled = !preset.enabled;
+      if(preset.enabled) {
+        preset.status = 'warning';
       } else {
-        client.status = 'disabled';
+        preset.status = 'disabled';
       }
-      this.saveClient(client);
+      this.savePreset(preset);
     },
 
     updateDialog(newVal) {
       this.state.dialog = newVal;
     },
     handleMessage(data) {
-
-      // Handle client_status message type
-      if (data.type === 'client_status') {
-
-        if(this.clientImmutable[data.name]) {
-          
-          // If we have just deleted a client, we need to wait for the next client_status message
-          console.log("Ignoring client_status message for immutable client", data.name)
-          delete this.clientImmutable[data.name]
-          return;
-        }
-
-        // Find the client with the given name
-        const client = this.state.clients.find(client => client.name === data.name);
-
-        if (client && !client.dirty) {
-          // Update the model name of the client
-          client.model_name = data.model_name;
-          client.model = client.model_name;
-          client.type = data.message;
-          client.status = data.status;
-          client.can_be_coerced = data.data.can_be_coerced;
-          client.max_token_length = data.max_token_length;
-          client.api_url = data.api_url;
-          client.api_key = data.api_key;
-          client.double_coercion = data.data.double_coercion;
-          client.manual_model_choices = data.data.manual_model_choices;
-          client.rate_limit = data.data.rate_limit;
-          client.data_format = data.data.data_format;
-          client.data = data.data;
-          client.enabled = data.data.enabled;
-          client.system_prompts = data.data.system_prompts;
-          client.request_information = data.data.request_information;
-          client.preset_group = data.data.preset_group;
-          client.embeddings_model_name = data.data.embeddings_model_name;
-          for (let key in client.data.meta.extra_fields) {
-            if (client.data[key] === null || client.data[key] === undefined) {
-              client.data[key] = client.data.meta.defaults[key];
-            }
-            client[key] = client.data[key];
-          }
-
-        } else if(!client) {
-          console.log("Adding new client", data);
-
-          this.state.clients.push({ 
-            name: data.name, 
-            model_name: data.model_name, 
-            model: data.model_name,
-            type: data.message, 
-            status: data.status,
-            can_be_coerced: data.data.can_be_coerced,
-            max_token_length: data.max_token_length,
-            api_url: data.api_url,
-            api_key: data.api_key,
-            double_coercion: data.data.double_coercion,
-            manual_model_choices: data.data.manual_model_choices,
-            rate_limit: data.data.rate_limit,
-            data_format: data.data.data_format,
-            data: data.data,
-            enabled: data.data.enabled,
-            system_prompts: data.data.system_prompts,
-            preset_group: data.data.preset_group,
-            request_information: data.data.request_information,
-            embeddings_model_name: data.data.embeddings_model_name,
-          });
-
-          // apply extra field defaults
-          let client = this.state.clients[this.state.clients.length - 1];
-          for (let key in client.data.meta.extra_fields) {
-            if (client.data[key] === null || client.data[key] === undefined) {
-              client.data[key] = client.data.meta.defaults[key];
-            }
-            client[key] = client.data[key];
-          }
-
-          // sort the clients by name
-          this.state.clients.sort((a, b) => (a.name > b.name) ? 1 : -1);
-        }
-
-        return;
-      }
-
       // Handle model_preset_status message type
       if (data.type === 'model_preset_status') {
         
@@ -466,36 +412,49 @@ export default {
         }
 
         // Find the preset with the given config_id
-        const client = this.state.clients.find(client => client.name === data.name || client.config_id === data.name);
+        const preset = this.state.presets.find(preset => preset.config_id === data.config_id);
 
-        if (client && !client.dirty) {
+        if (preset && !preset.dirty) {
+          // Debug: Log what we're updating
+          console.log('Updating preset from backend response:', {
+            config_id: data.config_id,
+            old_coercion: preset.double_coercion,
+            new_coercion: data.data.double_coercion,
+            preset_dirty: preset.dirty
+          });
+          
           // Update the model preset information
-          client.name = data.name;
-          client.config_id = data.name;
-          client.model_name = data.model_name;
-          client.model = data.model_name;
-          client.type = data.message; // provider name
-          client.status = data.status;
-          client.enabled = data.data.enabled;
-          client.max_token_length = data.data.max_context_size || 8192;
-          client.double_coercion = data.data.double_coercion;
-          client.system_prompts = data.data.system_prompts || {};
-          client.data = {
+          preset.name = data.name;  // Human-readable display name
+          preset.config_id = data.config_id;  // UUID for backend operations
+          preset.model_name = data.model_name;
+          preset.model = data.model_name;
+          preset.type = data.message; // provider name
+          preset.status = data.status;
+          preset.enabled = data.data.enabled;
+          preset.max_token_length = data.data.max_context_size || 8192;
+          preset.double_coercion = data.data.double_coercion;
+          preset.system_prompts = data.data.system_prompts || {};
+          
+          // Debug: Confirm the update
+          console.log('Preset updated - new coercion:', preset.double_coercion);
+          preset.data = {
             ...data.data,
             // For backward compatibility with existing template checks
             meta: data.data.meta || { extra_fields: {}, defaults: {} },
             has_prompt_template: true, // ModelPresets always have templates
             enabled: data.data.enabled,
           };
-          client.preset_group = "";
-          client.request_information = null;
+          // Ensure compatibility fields for ClientModal
+          preset.can_be_coerced = true; // Model presets can always be coerced
+          preset.preset_group = "";
+          preset.request_information = null;
 
-        } else if(!client) {
+        } else if(!preset) {
           console.log("Adding new model preset", data);
 
-          this.state.clients.push({ 
-            name: data.name,
-            config_id: data.name,
+          this.state.presets.push({ 
+            name: data.name,  // Human-readable display name
+            config_id: data.config_id,  // UUID for backend operations
             model_name: data.model_name, 
             model: data.model_name,
             type: data.message, // provider name
@@ -511,12 +470,14 @@ export default {
               has_prompt_template: true, // ModelPresets always have templates
               enabled: data.data.enabled,
             },
+            // Ensure compatibility fields for ClientModal
+            can_be_coerced: true, // Model presets can always be coerced
             preset_group: "",
             request_information: null,
           });
 
           // sort the presets by name
-          this.state.clients.sort((a, b) => (a.name > b.name) ? 1 : -1);
+          this.state.presets.sort((a, b) => (a.name > b.name) ? 1 : -1);
         }
 
         return;

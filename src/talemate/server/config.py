@@ -597,16 +597,12 @@ class ConfigPlugin:
             return parameters  # Graceful fallback
 
     async def handle_save_model_config(self, data):
-        """Handle saving a model configuration"""
+        """Handle saving a model configuration as a ModelPreset"""
         log.info("Saving model configuration", data=data)
         
         try:
             # Load current config
-            current_config = load_config()
-            
-            # Initialize model_configs section if it doesn't exist
-            if "model_configs" not in current_config:
-                current_config["model_configs"] = {}
+            current_config = load_config(as_model=True)
             
             # Create unique config ID
             import uuid
@@ -629,24 +625,42 @@ class ConfigPlugin:
             else:
                 validated_parameters = parameters
             
-            # Save model configuration
-            current_config["model_configs"][config_id] = {
-                "id": config_id,
-                "name": data.get("name"),
-                "model": model_data,
-                "provider": provider_data,
-                "parameters": validated_parameters,
-                "created_at": data.get("created_at") or str(datetime.datetime.now()),
-                "updated_at": str(datetime.datetime.now())
-            }
+            # Create ModelPresetConfig for the model_presets section
+            from talemate.config import ModelPresetConfig
+            preset_config = ModelPresetConfig(
+                config_id=config_id,
+                provider_name=provider_data.get("provider_name", "Unknown"),
+                model_name=model_name,
+                model_full_name=model_data.get("full_name", model_name),
+                provider_instance_id=provider_id,
+                capabilities=model_data.get("capabilities", {}),
+                parameters=validated_parameters,
+                double_coercion=data.get("double_coercion"),
+                enabled=True
+            )
             
-            log.info("Model config to save", config_id=config_id, configs_count=len(current_config.get("model_configs", {})))
+            # Save to model_presets section
+            current_config.model_presets[config_id] = preset_config
+            
+            log.info("Model preset to save", config_id=config_id, configs_count=len(current_config.model_presets))
             
             # Save config to file
             save_config(current_config)
             
             # Update websocket handler config
-            self.websocket_handler.config = current_config
+            self.websocket_handler.config = current_config.model_dump()
+            
+            # Create ModelPreset object and add to websocket handler
+            from talemate.model_preset import ModelPreset
+            model_preset = ModelPreset.from_preset_config(preset_config)
+            
+            # Add to websocket handler's model_presets
+            if not hasattr(self.websocket_handler, 'model_presets'):
+                self.websocket_handler.model_presets = {}
+            self.websocket_handler.model_presets[config_id] = model_preset
+            
+            # Send model preset status to frontend
+            self.websocket_handler.handle_model_preset_status(config_id, model_preset, "idle")
             
             # Send success response
             self.websocket_handler.queue_put({
@@ -770,4 +784,80 @@ class ConfigPlugin:
                 "type": "config",
                 "action": "model_configs_error",
                 "data": {"message": f"Failed to get configurations: {str(e)}"},
+            })
+    
+    async def handle_update_model_preset(self, data):
+        """Handle updating a model preset configuration"""
+        config_id = data.get("config_id")
+        log.info("Updating model preset", config_id=config_id, data=data)
+        
+        if not config_id:
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_preset_update_error",
+                "data": {"message": "Configuration ID is required"},
+            })
+            return
+        
+        try:
+            # Load current config
+            current_config = load_config(as_model=True)
+            
+            # Check if preset exists
+            if config_id not in current_config.model_presets:
+                self.websocket_handler.queue_put({
+                    "type": "config",
+                    "action": "model_preset_update_error",
+                    "data": {"message": "Model preset not found"},
+                })
+                return
+            
+            # Update the preset fields
+            preset = current_config.model_presets[config_id]
+            
+            if "double_coercion" in data:
+                log.info("Updating double_coercion", old_value=preset.double_coercion, new_value=data["double_coercion"])
+                preset.double_coercion = data["double_coercion"]
+            
+            if "max_context_size" in data:
+                preset.max_context_size = data["max_context_size"]
+                
+            if "system_prompts" in data:
+                preset.system_prompts = data["system_prompts"]
+                
+            if "enabled" in data:
+                preset.enabled = data["enabled"]
+            
+            # Save config to file
+            save_config(current_config)
+            
+            # Update websocket handler config
+            self.websocket_handler.config = current_config.model_dump()
+            
+            # Update the ModelPreset object in websocket handler
+            from talemate.model_preset import ModelPreset
+            model_preset = ModelPreset.from_preset_config(preset)
+            
+            if hasattr(self.websocket_handler, 'model_presets'):
+                self.websocket_handler.model_presets[config_id] = model_preset
+            
+            # Send updated model preset status to frontend
+            self.websocket_handler.handle_model_preset_status(config_id, model_preset, "idle")
+            
+            # Send success response
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_preset_update_complete",
+                "data": {
+                    "config_id": config_id,
+                    "message": "Model preset updated successfully"
+                },
+            })
+            
+        except Exception as e:
+            log.error("Failed to update model preset", error=str(e))
+            self.websocket_handler.queue_put({
+                "type": "config",
+                "action": "model_preset_update_error",
+                "data": {"message": f"Failed to update preset: {str(e)}"},
             })

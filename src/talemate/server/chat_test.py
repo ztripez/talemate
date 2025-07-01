@@ -117,9 +117,9 @@ class ChatTestPlugin:
             
             # Load config to get the model configuration
             config = load_config()
-            model_configs = config.get("model_configs", {})
+            model_presets = config.get("model_presets", {})
             
-            model_config = model_configs.get(payload.config_id)
+            model_config = model_presets.get(payload.config_id)
             if not model_config:
                 self.websocket_handler.queue_put({
                     "type": "chat_test",

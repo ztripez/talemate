@@ -15,22 +15,6 @@
           <v-icon :class="{ 'mdi-spin': loading }">mdi-refresh</v-icon>
           <v-tooltip activator="parent" location="bottom">Refresh model list</v-tooltip>
         </v-btn>
-        <v-btn
-          variant="text"
-          size="small"
-          @click="openSavedConfigs"
-          :disabled="loading"
-        >
-          <v-icon start>mdi-content-save-all</v-icon>
-          Saved Configs
-          <v-badge
-            v-if="savedConfigsCount > 0"
-            :content="savedConfigsCount"
-            color="primary"
-            inline
-            class="ml-2"
-          ></v-badge>
-        </v-btn>
       </v-card-title>
       
       <v-card-text>
@@ -326,109 +310,6 @@
       </v-card-text>
     </v-card>
     
-    <!-- Model Configuration Dialog -->
-    <!-- Saved Configurations Dialog -->
-    <v-dialog v-model="savedConfigsDialog" max-width="900px">
-      <v-card>
-        <v-card-title>
-          <v-icon class="mr-1">mdi-content-save-all</v-icon>
-          Saved Model Configurations
-        </v-card-title>
-        
-        <v-card-text>
-          <v-row v-if="loadingSavedConfigs" class="justify-center">
-            <v-col cols="auto" class="text-center pa-8">
-              <v-progress-circular indeterminate size="48" color="primary"></v-progress-circular>
-              <div class="text-body-1 mt-4">Loading configurations...</div>
-            </v-col>
-          </v-row>
-          
-          <v-row v-else-if="savedConfigs.length === 0" class="justify-center">
-            <v-col cols="12" md="6" class="pa-4">
-              <v-alert type="info" variant="tonal">
-                <v-alert-title>No Saved Configurations</v-alert-title>
-                <div>You haven't saved any model configurations yet. Configure a model and save it to see it here.</div>
-              </v-alert>
-            </v-col>
-          </v-row>
-          
-          <v-row v-else>
-            <v-col cols="12">
-              <v-list>
-                <v-list-item
-                  v-for="config in savedConfigs"
-                  :key="config.id"
-                  class="mb-2"
-                  rounded
-                  elevation="1"
-                >
-                  <template v-slot:prepend>
-                    <v-icon>mdi-robot</v-icon>
-                  </template>
-                  
-                  <v-list-item-title>{{ config.name }}</v-list-item-title>
-                  <v-list-item-subtitle>
-                    <div>{{ config.provider.provider_name }} • {{ config.model.display_name || config.model.name }}</div>
-                    <div class="text-caption mt-1">
-                      <v-chip size="x-small" variant="text" class="pa-0 mr-2">
-                        <v-icon size="x-small" start>mdi-thermometer</v-icon>
-                        {{ config.parameters.temperature }}
-                      </v-chip>
-                      <v-chip size="x-small" variant="text" class="pa-0 mr-2">
-                        <v-icon size="x-small" start>mdi-counter</v-icon>
-                        {{ config.parameters.max_tokens || config.parameters.max_output_tokens || 2048 }}
-                      </v-chip>
-                      <span class="text-grey">• {{ formatDate(config.created_at) }}</span>
-                    </div>
-                  </v-list-item-subtitle>
-                  
-                  <template v-slot:append>
-                    <v-btn
-                      icon="mdi-pencil"
-                      size="small"
-                      variant="text"
-                      @click="editConfig(config)"
-                      title="Edit configuration"
-                    ></v-btn>
-                    <v-btn
-                      icon="mdi-delete"
-                      size="small"
-                      variant="text"
-                      color="error"
-                      @click="confirmDeleteConfig(config)"
-                      title="Delete configuration"
-                    ></v-btn>
-                  </template>
-                </v-list-item>
-              </v-list>
-            </v-col>
-          </v-row>
-        </v-card-text>
-        
-        <v-card-actions>
-          <v-spacer></v-spacer>
-          <v-btn variant="text" @click="savedConfigsDialog = false">Close</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-    
-    <!-- Delete Confirmation Dialog -->
-    <v-dialog v-model="deleteDialog" max-width="500px">
-      <v-card>
-        <v-card-title>
-          <v-icon class="mr-1" color="error">mdi-alert</v-icon>
-          Delete Configuration?
-        </v-card-title>
-        <v-card-text>
-          Are you sure you want to delete the configuration "{{ configToDelete?.name }}"? This action cannot be undone.
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer></v-spacer>
-          <v-btn variant="text" @click="deleteDialog = false">Cancel</v-btn>
-          <v-btn variant="flat" color="error" @click="deleteConfig">Delete</v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
     
     <!-- Model Configuration Dialog -->
     <v-dialog v-model="configDialog" max-width="800px">
@@ -452,12 +333,12 @@
             <v-col cols="12">
               <v-text-field
                 v-model="configName"
-                label="Configuration Name"
+                label="Preset Name"
                 density="compact"
                 variant="outlined"
                 placeholder="e.g., Creative Writing, Code Assistant"
                 persistent-hint
-                hint="Give this configuration a memorable name"
+                hint="Give this preset a memorable name"
               ></v-text-field>
             </v-col>
           </v-row>
@@ -651,7 +532,7 @@
         <v-card-actions>
           <v-spacer></v-spacer>
           <v-btn variant="text" @click="cancelConfig">Cancel</v-btn>
-          <v-btn variant="flat" color="primary" @click="saveModelConfig">{{ editingConfig ? 'Update' : 'Save' }} Configuration</v-btn>
+          <v-btn variant="flat" color="primary" @click="saveModelConfig">{{ editingConfig ? 'Update' : 'Save' }} Preset</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -670,7 +551,7 @@ export default {
       default: false
     }
   },
-  emits: ['update:modelValue', 'modelSelected', 'notify'],
+  emits: ['update:modelValue', 'modelSelected', 'notify', 'presetSaved'],
   data() {
     return {
       searchQuery: '',
@@ -688,11 +569,6 @@ export default {
       chipInput: {},
       expandedPanels: [],
       expandedSubPanels: {}, // Track expanded state for subgroups
-      savedConfigsDialog: false,
-      savedConfigs: [],
-      loadingSavedConfigs: false,
-      deleteDialog: false,
-      configToDelete: null,
       editingConfig: null,
       activeFilters: [], // Track active capability filters
       filteredCache: null, // Cache filtered results
@@ -729,9 +605,6 @@ export default {
       
       // Otherwise return original until filtering completes
       return this.modelGroups
-    },
-    savedConfigsCount() {
-      return this.savedConfigs.length
     }
   },
   watch: {
@@ -747,8 +620,6 @@ export default {
           // Expand all panels when dialog opens
           this.expandedPanels = this.filteredModelGroups.map((_, index) => index)
         }
-        // Also load saved configs to show count
-        this.loadSavedConfigsSilently()
       }
     },
     searchQuery(newVal) {
@@ -1082,12 +953,12 @@ export default {
         
         // Show success feedback
         this.$emit('notify', {
-          message: `Configuration "${this.configName}" saved successfully!`,
+          message: `Preset "${this.configName}" saved successfully!`,
           type: 'success'
         })
         
-        // Always refresh saved configs to update the counter
-        this.loadSavedConfigsSilently()
+        // Emit event to refresh preset listing
+        this.$emit('presetSaved')
         
       } catch (err) {
         console.error('Failed to save model configuration:', err)
@@ -1277,162 +1148,6 @@ export default {
       } catch (e) {
         return 'Invalid JSON format'
       }
-    },
-    
-    // Saved configurations methods
-    async openSavedConfigs() {
-      console.log('Opening saved configs dialog')
-      this.savedConfigsDialog = true
-      await this.loadSavedConfigs()
-      console.log('Loaded configs:', this.savedConfigs)
-    },
-    
-    async loadSavedConfigs() {
-      this.loadingSavedConfigs = true
-      
-      try {
-        const ws = this.getWebsocket()
-        ws.send(JSON.stringify({
-          type: 'config',
-          action: 'request_model_configs'
-        }))
-        
-        await this.waitForConfigsData()
-      } catch (err) {
-        console.error('Failed to load saved configurations:', err)
-      } finally {
-        this.loadingSavedConfigs = false
-      }
-    },
-    
-    async loadSavedConfigsSilently() {
-      // Load configs without showing loading state
-      try {
-        const ws = this.getWebsocket()
-        ws.send(JSON.stringify({
-          type: 'config',
-          action: 'request_model_configs'
-        }))
-        
-        await this.waitForConfigsData()
-      } catch (err) {
-        console.error('Failed to load saved configurations:', err)
-      }
-    },
-    
-    waitForConfigsData() {
-      return new Promise((resolve, reject) => {
-        const ws = this.getWebsocket()
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout waiting for configs data'))
-        }, 5000)
-        
-        const handler = (event) => {
-          try {
-            const data = JSON.parse(event.data)
-            if (data.type === 'config') {
-              if (data.action === 'model_configs_data') {
-                clearTimeout(timeout)
-                ws.removeEventListener('message', handler)
-                this.savedConfigs = data.data.configs || []
-                resolve()
-              } else if (data.action === 'model_configs_error') {
-                clearTimeout(timeout)
-                ws.removeEventListener('message', handler)
-                reject(new Error(data.data.message || 'Failed to load configs'))
-              }
-            }
-          } catch (e) {
-            // Ignore parsing errors
-          }
-        }
-        
-        ws.addEventListener('message', handler)
-      })
-    },
-    
-    editConfig(config) {
-      this.editingConfig = config
-      
-      // Reconstruct the full model object with parameters array
-      this.selectedModel = {
-        ...config.model,
-        parameters: Object.keys(config.parameters || {})
-      }
-      
-      this.selectedProvider = config.provider
-      this.configName = config.name
-      this.modelConfig = { ...config.parameters }
-      this.chipInput = {}
-      
-      // Initialize chip inputs
-      Object.keys(config.parameters).forEach(param => {
-        const paramConfig = getParameterConfig(param)
-        if (paramConfig.type === 'chips' && !this.chipInput[param]) {
-          this.chipInput[param] = ''
-        }
-      })
-      
-      this.configDialog = true
-    },
-    
-    confirmDeleteConfig(config) {
-      this.configToDelete = config
-      this.deleteDialog = true
-    },
-    
-    async deleteConfig() {
-      if (!this.configToDelete) return
-      
-      try {
-        const ws = this.getWebsocket()
-        ws.send(JSON.stringify({
-          type: 'config',
-          action: 'delete_model_config',
-          config_id: this.configToDelete.id
-        }))
-        
-        await this.waitForDeleteResponse()
-        
-        // Refresh the list
-        await this.loadSavedConfigs()
-        
-      } catch (err) {
-        console.error('Failed to delete configuration:', err)
-      } finally {
-        this.deleteDialog = false
-        this.configToDelete = null
-      }
-    },
-    
-    waitForDeleteResponse() {
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Timeout waiting for delete response'))
-        }, 5000)
-        
-        const handler = (event) => {
-          try {
-            const data = JSON.parse(event.data)
-            if (data.type === 'config') {
-              if (data.action === 'model_config_delete_complete') {
-                clearTimeout(timeout)
-                ws.removeEventListener('message', handler)
-                resolve()
-              } else if (data.action === 'model_config_delete_error') {
-                clearTimeout(timeout)
-                ws.removeEventListener('message', handler)
-                reject(new Error(data.data.message || 'Failed to delete'))
-              }
-            }
-          } catch (e) {
-            // Ignore parsing errors
-          }
-        }
-        
-        const ws = this.getWebsocket()
-        ws.addEventListener('message', handler)
-      })
     },
     
     formatDate(dateString) {

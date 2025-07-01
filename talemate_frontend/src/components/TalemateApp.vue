@@ -129,7 +129,7 @@
         </v-alert>
 
         <v-list>
-          <AIClient ref="aiClient" @save="saveClients" @error="uxErrorHandler" @clients-updated="saveClients" @model-presets-updated="saveModelPresets" @client-assigned="saveAgents" @open-app-config="openAppConfig" :immutable-config="appConfig"></AIClient>
+          <AIClient ref="aiClient" @save="saveClients" @error="uxErrorHandler" @clients-updated="saveClients" @model-presets-updated="saveModelPresets" @client-assigned="saveAgents" @open-app-config="openAppConfig" @open-model-browser="openModelBrowser" :immutable-config="appConfig"></AIClient>
           <v-divider></v-divider>
           <v-list-subheader class="text-uppercase"><v-icon>mdi-transit-connection-variant</v-icon> Agents</v-list-subheader>
           <AIAgent ref="aiAgent" @save="saveAgents" @agents-updated="saveAgents" :agentState="agentState"></AIAgent>
@@ -278,7 +278,7 @@
       </v-container>
     </v-main>
 
-    <AppConfig ref="appConfig" :agentStatus="agentStatus" :sceneActive="sceneActive" :clientStatus="clientStatus" />
+    <AppConfig ref="appConfig" :agentStatus="agentStatus" :sceneActive="sceneActive" :clientStatus="clientStatus" @preset-saved="onPresetSaved" />
     <v-snackbar v-model="errorNotification" color="red-darken-1" :timeout="3000">
         {{ errorMessage }}
     </v-snackbar>
@@ -1127,7 +1127,7 @@ export default {
       if (!this.$refs.aiClient) {
         return [];
       }
-      return this.$refs.aiClient.state.clients;
+      return this.$refs.aiClient.state.presets;
     },
     getAgents() {
       if (!this.$refs.aiAgent) {
@@ -1193,6 +1193,13 @@ export default {
     },
     openAppConfig(tab, page, item=null) {
       this.$refs.appConfig.show(tab, page, item);
+    },
+    openModelBrowser() {
+      this.$refs.appConfig.openModelBrowser();
+    },
+    onPresetSaved() {
+      // Request fresh client status to refresh the preset listing
+      this.requestClientsStatus();
     },
     uxErrorHandler(error) {
       this.errorNotification = true;

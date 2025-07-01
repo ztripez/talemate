@@ -295,7 +295,10 @@ export default {
     'state.currentClient': {
       immediate: true,
       handler(newVal) {
+        console.log('ClientModal - currentClient changed:', newVal);
+        console.log('ClientModal - currentClient coercion:', newVal?.double_coercion);
         this.client = { ...newVal }; // Update client data property when currentClient changes
+        console.log('ClientModal - after copy, client coercion:', this.client?.double_coercion);
       }
     },
     localDialog(newVal) {
@@ -328,6 +331,15 @@ export default {
       }
     },
     validateName() {
+      // For Model Presets, skip name validation since they use different naming logic
+      if (this.state.formTitle === 'Edit Model Preset') {
+        return true;
+      }
+
+      // For legacy clients, ensure we have a clients array to validate against
+      if (!this.state.clients || !Array.isArray(this.state.clients)) {
+        return true; // Skip validation if clients array doesn't exist
+      }
 
       // if we are editing a client, we should exclude the current client from the check
       if (!this.typeEditable()) {
@@ -355,12 +367,26 @@ export default {
       if (this.clientMeta().manual_model && !this.clientMeta().manual_model_choices) {
         this.client.model = this.client.model_name;
       }
+      
+      // Debug: Log the client object being saved
+      console.log('ClientModal save - client.double_coercion:', this.client.double_coercion);
+      console.log('ClientModal save - full client:', this.client);
+      
       this.$emit('save', this.client); // Emit save event with client object
       this.close();
     },
 
     clientMeta() {
-      if (!Object.keys(this.clientTypes).length)
+      // For Model Presets, return a safe default since they don't use clientTypes
+      if (this.state.formTitle === 'Edit Model Preset') {
+        return { 
+          defaults: {},
+          manual_model: false,
+          manual_model_choices: null
+        };
+      }
+
+      if (!this.clientTypes || !Object.keys(this.clientTypes).length)
         return { defaults: {} };
       if (!this.clientTypes[this.client.type])
         return { defaults: {} };
