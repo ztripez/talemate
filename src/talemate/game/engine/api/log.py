@@ -1,4 +1,3 @@
-from typing import TYPE_CHECKING
 
 import structlog
 
@@ -9,7 +8,6 @@ __all__ = ["create"]
 
 def create(log: structlog.BoundLogger) -> "ScopedAPI":
     class LogAPI(ScopedAPI):
-
         def info(self, event, *args, **kwargs):
             log.info(event, *args, **kwargs)
 

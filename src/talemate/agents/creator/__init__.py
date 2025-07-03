@@ -18,6 +18,7 @@ from talemate.agents.base import AgentAction
 
 import talemate.agents.creator.nodes
 
+
 @register()
 class CreatorAgent(
     CharacterCreatorMixin,
@@ -51,7 +52,7 @@ class CreatorAgent(
     @set_processing
     async def generate_title(self, text: str):
         title = await Prompt.request(
-            f"creator.generate-title",
+            "creator.generate-title",
             self.client,
             "create_short",
             vars={

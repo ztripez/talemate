@@ -114,7 +114,6 @@ class VisualBase(Agent):
                 label="Process in Background",
                 description="Process renders in the background",
             ),
-
             "_prompts": AgentAction(
                 enabled=True,
                 container=True,
@@ -280,7 +279,6 @@ class VisualBase(Agent):
         await super().ready_check(task)
 
     async def setup_check(self):
-
         if not self.actions["automatic_setup"].enabled:
             return
 
@@ -289,7 +287,6 @@ class VisualBase(Agent):
             await getattr(self.client, f"visual_{backend.lower()}_setup")(self)
 
     async def apply_config(self, *args, **kwargs):
-
         try:
             backend = kwargs["actions"]["_config"]["config"]["backend"]["value"]
         except (KeyError, TypeError):
@@ -312,7 +309,6 @@ class VisualBase(Agent):
 
         backend_fn = getattr(self, f"{self.backend.lower()}_apply_config", None)
         if backend_fn:
-
             if not backend_changed and was_disabled and self.enabled:
                 # If the backend has not changed, but the agent was previously disabled
                 # and is now enabled, we need to trigger the backend apply_config function
@@ -336,7 +332,6 @@ class VisualBase(Agent):
         )
 
     def prepare_prompt(self, prompt: str, styles: list[Style] = None) -> Style:
-
         prompt_style = Style()
         prompt_style.load(prompt)
 
@@ -432,9 +427,8 @@ class VisualBase(Agent):
     async def generate(
         self, format: str = "portrait", prompt: str = None, automatic: bool = False
     ):
+        context: VisualContextState = visual_context.get()
 
-        context:VisualContextState = visual_context.get()
-        
         log.debug("visual generate", context=context)
 
         if automatic and not self.allow_automatic_generation:
@@ -466,7 +460,7 @@ class VisualBase(Agent):
 
         thematic_style = self.default_style
         vis_type_styles = self.vis_type_styles(context.vis_type)
-        prompt:Style = self.prepare_prompt(prompt, [vis_type_styles, thematic_style])
+        prompt: Style = self.prepare_prompt(prompt, [vis_type_styles, thematic_style])
 
         if context.vis_type == VIS_TYPES.CHARACTER:
             prompt.keywords.append("character portrait")
@@ -488,12 +482,16 @@ class VisualBase(Agent):
             format = "portrait"
 
         context.format = format
-        
+
         can_generate_image = self.enabled and self.backend_ready
-        
+
         if not context.prompt_only and not can_generate_image:
-            emit("status", "Visual agent is not ready for image generation, will output prompt instead.", status="warning")
-        
+            emit(
+                "status",
+                "Visual agent is not ready for image generation, will output prompt instead.",
+                status="warning",
+            )
+
         # if prompt_only, we don't need to generate an image
         # instead we emit a system message with the prompt
         if context.prompt_only or not can_generate_image:
@@ -509,20 +507,24 @@ class VisualBase(Agent):
                     "title": f"Visual Prompt - {context.title}",
                     "display": "tonal",
                     "as_markdown": True,
-                }
+                },
             )
             return
-        
+
         if not can_generate_image:
             return
-        
+
         # Call the backend specific generate function
 
         backend = self.backend
         fn = f"{backend.lower()}_generate"
 
         log.info(
-            "visual generate", backend=backend, prompt=prompt, format=format, context=context
+            "visual generate",
+            backend=backend,
+            prompt=prompt,
+            format=format,
+            context=context,
         )
 
         if not hasattr(self, fn):
@@ -538,7 +540,6 @@ class VisualBase(Agent):
 
     @set_processing
     async def generate_environment_prompt(self, instructions: str = None):
-
         with RevisionDisabled():
             response = await Prompt.request(
                 "visual.generate-environment-prompt",
@@ -556,7 +557,6 @@ class VisualBase(Agent):
     async def generate_character_prompt(
         self, character_name: str, instructions: str = None
     ):
-
         character = self.scene.get_character(character_name)
 
         with RevisionDisabled():

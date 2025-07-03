@@ -240,12 +240,12 @@ class CmdDetermineCharacterDevelopment(TalemateCommand):
             raise ValueError("No character name provided.")
 
         character_name = self.args[0]
-        
+
         character = scene.get_character(character_name)
-        
+
         if not character:
             raise ValueError(f"Character {character_name} not found.")
 
         instructions = await world_state.determine_character_development(character)
-        
+
         # updates = await creator.update_character_sheet(character, instructions)

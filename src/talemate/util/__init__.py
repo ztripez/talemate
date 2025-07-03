@@ -17,6 +17,7 @@ log = structlog.get_logger("talemate.util")
 
 TIKTOKEN_ENCODING = tiktoken.encoding_for_model("gpt-4-turbo")
 
+
 def count_tokens(source):
     if isinstance(source, list):
         t = 0
@@ -53,6 +54,3 @@ def clean_id(name: str) -> str:
     cleaned_name = re.sub(r"[^a-zA-Z0-9_\- ]", "", name)
 
     return cleaned_name
-
-
-

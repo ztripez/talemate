@@ -5,6 +5,7 @@ import struct
 import structlog
 from PIL import Image
 import json
+
 log = structlog.get_logger("talemate.util.image")
 
 __all__ = [
@@ -25,7 +26,6 @@ def fix_unquoted_keys(s):
 
 def extract_metadata(img_path, img_format):
     return chara_read(img_path)
-
 
 
 def read_metadata_from_png_text(image_path: str) -> dict:
@@ -50,7 +50,6 @@ def read_metadata_from_png_text(image_path: str) -> dict:
         offset += 12 + length
 
     raise ValueError("No character metadata found.")
-
 
 
 def chara_read(img_url, input_format=None):
@@ -87,7 +86,7 @@ def chara_read(img_url, input_format=None):
                 return False
 
             return char_data
-        except Exception as err:
+        except Exception:
             raise
             return False
 

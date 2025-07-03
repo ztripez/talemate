@@ -36,9 +36,9 @@ def _list_files_and_directories(root: str, path: str) -> list:
         # Check each file if it matches any of the patterns
         for filename in filenames:
             # Skip JSON files inside 'nodes' directories
-            if filename.endswith('.json') and 'nodes' in dirpath.split(os.sep):
+            if filename.endswith(".json") and "nodes" in dirpath.split(os.sep):
                 continue
-                
+
             # Get the relative file path
             rel_path = os.path.relpath(dirpath, root)
             for pattern in patterns:
