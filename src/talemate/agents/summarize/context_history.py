@@ -304,35 +304,31 @@ class ContextHistoryMixin:
 
     @property
     def scene_history_enforce_boundary(self) -> bool:
-        return self.actions["manage_scene_history"].config["enforce_boundary"].value
+        return self.resolve_config("manage_scene_history", "enforce_boundary")
 
     @property
     def scene_history_dialogue_ratio(self) -> int:
-        return self.actions["manage_scene_history"].config["dialogue_ratio"].value
+        return self.resolve_config("manage_scene_history", "dialogue_ratio")
 
     @property
     def scene_history_summary_detail_ratio(self) -> int:
-        return self.actions["manage_scene_history"].config["summary_detail_ratio"].value
+        return self.resolve_config("manage_scene_history", "summary_detail_ratio")
 
     @property
     def scene_history_max_budget(self) -> int:
-        return self.actions["manage_scene_history"].config["max_budget"].value
+        return self.resolve_config("manage_scene_history", "max_budget")
 
     @property
     def scene_history_best_fit(self) -> bool:
-        return self.actions["manage_scene_history"].config["best_fit"].value
+        return self.resolve_config("manage_scene_history", "best_fit")
 
     @property
     def scene_history_best_fit_min_dialogue(self) -> int:
-        return (
-            self.actions["manage_scene_history"].config["best_fit_min_dialogue"].value
-        )
+        return self.resolve_config("manage_scene_history", "best_fit_min_dialogue")
 
     @property
     def scene_history_best_fit_max_dialogue(self) -> int:
-        return (
-            self.actions["manage_scene_history"].config["best_fit_max_dialogue"].value
-        )
+        return self.resolve_config("manage_scene_history", "best_fit_max_dialogue")
 
     def _has_layered_history(self, scene: Scene) -> bool:
         """Check if layered history is available for the given scene."""
@@ -872,13 +868,40 @@ class ContextHistoryMixin:
 
         if has_layered:
             num_layers = len(scene.layered_history)
+
+            # Layer 0's start/end index into the full archived_history, but
+            # the archived level below only contains summary entries. Static
+            # entries (no "end" — pre-established notes) are always contiguous
+            # at the front of archived_history, so a single constant offset
+            # realigns layer-0 indices with the archived level.
+            archived_offset = next(
+                (
+                    idx
+                    for idx, e in enumerate(scene.archived_history)
+                    if e.get("end") is not None
+                ),
+                0,
+            )
+
             for i in range(num_layers - 1, -1, -1):
                 layer = scene.layered_history[i]
                 if not layer:
                     continue
+
+                entries = layer
+                if i == 0 and archived_offset:
+                    entries = [
+                        {
+                            **e,
+                            "start": max(0, e.get("start", 0) - archived_offset),
+                            "end": e.get("end", 0) - archived_offset,
+                        }
+                        for e in layer
+                    ]
+
                 formatted: list[str] = []
                 tokens: list[int] = []
-                for entry in layer:
+                for entry in entries:
                     text, _ = self._context_history_format_layered_entry(
                         entry, scene.ts
                     )
@@ -886,7 +909,7 @@ class ContextHistoryMixin:
                     tokens.append(count_tokens(text))
                 levels.append(
                     _BestFitLevel(
-                        entries=layer,
+                        entries=entries,
                         formatted=formatted,
                         tokens=tokens,
                         type="layer",
