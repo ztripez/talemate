@@ -1,6 +1,8 @@
+"""Game-state condition models and comparison helpers."""
+
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 import pydantic
 
@@ -9,53 +11,131 @@ from talemate.util.path import get_path_parent, split_state_path
 __all__ = [
     "Condition",
     "ConditionGroup",
+    "CONDITION_OPERATORS",
+    "ConditionOperator",
+    "compare_condition_values",
     "condition_groups_match",
+    "read_condition_path",
 ]
+
+#: Comparison operators accepted by game-state and primitive-aware conditions.
+ConditionOperator: TypeAlias = Literal[
+    "==",
+    "!=",
+    ">",
+    "<",
+    ">=",
+    "<=",
+    "in",
+    "not_in",
+    "is_true",
+    "is_false",
+    "is_null",
+    "is not null",
+    "is_not_null",
+]
+CONDITION_OPERATORS = frozenset(ConditionOperator.__args__)
+
+
+def try_parse_condition_number(value: Any) -> float | int | None:
+    """Parse an integer or float condition operand while excluding booleans."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+                return int(text)
+            return float(text)
+        except Exception:
+            return None
+    return None
+
+
+def compare_condition_values(actual: Any, operator: str, expected: Any = None) -> bool:
+    """Compare two values using Talemate condition operator semantics.
+
+    Invalid membership containers and unsupported operators raise an exception;
+    documented non-matches such as missing binary operands return ``False``.
+    """
+    if operator not in CONDITION_OPERATORS:
+        raise ValueError(f"Unsupported condition operator: {operator}")
+    if operator == "is_true":
+        return actual is True
+    if operator == "is_false":
+        return actual is False
+    if operator == "is_null":
+        return actual is None
+    if operator in ("is not null", "is_not_null"):
+        return actual is not None
+    if expected is None:
+        return False
+
+    numeric_only = operator in (">", "<", ">=", "<=")
+    mixed = operator in ("==", "!=", "in", "not_in")
+    if numeric_only:
+        left = try_parse_condition_number(actual)
+        right = try_parse_condition_number(expected)
+        if left is None or right is None:
+            return False
+    elif mixed:
+        actual_number = try_parse_condition_number(actual)
+        expected_number = try_parse_condition_number(expected)
+        if actual_number is not None and expected_number is not None:
+            left, right = actual_number, expected_number
+        else:
+            left = actual
+            right = expected_number if expected_number is not None else str(expected)
+    else:
+        left, right = actual, expected
+
+    if operator == "==":
+        return left == right
+    if operator == "!=":
+        return left != right
+    if operator == ">":
+        return left > right
+    if operator == "<":
+        return left < right
+    if operator == ">=":
+        return left >= right
+    if operator == "<=":
+        return left <= right
+    if operator == "in":
+        return right in left
+    if operator == "not_in":
+        return right not in left
+    raise ValueError(f"Unsupported condition operator: {operator}")
+
+
+def read_condition_path(game_state: Any, path: str) -> tuple[bool, Any]:
+    """Read a slash-delimited condition path from a game-state container."""
+    parent, leaf_key = get_path_parent(game_state, split_state_path(path), create=False)
+    if parent is None:
+        return False, None
+    if hasattr(parent, "has_var") and hasattr(parent, "get_var"):
+        if not parent.has_var(leaf_key):
+            return False, None
+        return True, parent.get_var(leaf_key)
+    if hasattr(parent, "get"):
+        value = parent.get(leaf_key)
+        return value is not None or leaf_key in parent, value
+    try:
+        return True, parent[leaf_key]
+    except (KeyError, IndexError):
+        return False, None
 
 
 class Condition(pydantic.BaseModel):
+    """Predicate that compares one game-state path against an expected value."""
+
     path: str
     value: Any | None = None
-    operator: Literal[
-        "==",
-        "!=",
-        ">",
-        "<",
-        ">=",
-        "<=",
-        "in",
-        "not_in",
-        "is_true",
-        "is_false",
-        "is_null",
-        "is not null",
-        "is_not_null",
-    ]
-
-    def _try_parse_number(self, value: Any) -> float | int | None:
-        if value is None:
-            return None
-
-        # bool is a subclass of int, but we don't want True/False treated as 1/0.
-        if isinstance(value, bool):
-            return None
-
-        if isinstance(value, (int, float)):
-            return value
-
-        if isinstance(value, str):
-            s = value.strip()
-            if not s:
-                return None
-            try:
-                # Use int when possible to keep comparisons nicer
-                if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
-                    return int(s)
-                return float(s)
-            except Exception:
-                return None
-
-        return None
+    operator: ConditionOperator
 
     def evaluate(self, game_state: Any) -> bool:
         """
@@ -68,95 +148,15 @@ class Condition(pydantic.BaseModel):
         Missing path always evaluates to False.
         """
 
-        try:
-            parts = split_state_path(self.path)
-            parent, leaf_key = get_path_parent(game_state, parts, create=False)
-        except Exception:
+        found, state_value = read_condition_path(game_state, self.path)
+        if not found:
             return False
-
-        if parent is None:
-            return False
-
-        try:
-            # Prefer the GameState API if available (duck typing) to keep this
-            # module independent from `talemate.game.state` imports.
-            if hasattr(parent, "has_var") and hasattr(parent, "get_var"):
-                if not parent.has_var(leaf_key):
-                    return False
-                state_value = parent.get_var(leaf_key)
-            else:
-                if leaf_key not in parent:
-                    return False
-                state_value = parent[leaf_key]
-
-            op = self.operator
-
-            # Unary operators (ignore provided values)
-            if op == "is_true":
-                return state_value is True
-            if op == "is_false":
-                return state_value is False
-            if op == "is_null":
-                return state_value is None
-            if op in ("is not null", "is_not_null"):
-                return state_value is not None
-
-            # For all other operators, a missing value can't match.
-            if self.value is None:
-                return False
-
-            numeric_only = op in (">", "<", ">=", "<=")
-            mixed = op in ("==", "!=", "in", "not_in")
-
-            # Coerce entered value according to rules:
-            # - numeric-only operators must have numeric value
-            # - mixed operators try number first, else treat as string
-            if numeric_only:
-                cond_num = self._try_parse_number(self.value)
-                state_num = self._try_parse_number(state_value)
-                if cond_num is None or state_num is None:
-                    return False
-                left = state_num
-                right = cond_num
-            elif mixed:
-                cond_num = self._try_parse_number(self.value)
-                state_num = self._try_parse_number(state_value)
-                if cond_num is not None and state_num is not None:
-                    left = state_num
-                    right = cond_num
-                else:
-                    left = state_value
-                    # For mixed ops, treat user-entered values as number if possible,
-                    # otherwise treat as string.
-                    right = cond_num if cond_num is not None else str(self.value)
-            else:
-                left = state_value
-                right = self.value
-
-            if op == "==":
-                return left == right
-            if op == "!=":
-                return left != right
-            if op == ">":
-                return left > right
-            if op == "<":
-                return left < right
-            if op == ">=":
-                return left >= right
-            if op == "<=":
-                return left <= right
-            if op == "in":
-                # Membership direction: condition.value in state_value
-                return right in left
-            if op == "not_in":
-                return right not in left
-        except Exception:
-            return False
-
-        return False
+        return compare_condition_values(state_value, self.operator, self.value)
 
 
 class ConditionGroup(pydantic.BaseModel):
+    """Boolean group of game-state conditions."""
+
     conditions: list[Condition] = pydantic.Field(default_factory=list)
     operator: Literal["and", "or"] = "and"
 
@@ -189,26 +189,29 @@ def condition_groups_match(condition_groups: Any, game_state: Any) -> bool:
       ]
 
     Notes:
-    - If the list is missing/empty/invalid, returns False.
+    - If the list is missing or empty, returns False.
+    - Malformed non-list inputs and invalid group items raise errors.
     - Groups combine with OR (any group matching is sufficient).
     """
+
+    if condition_groups is None:
+        return False
+
+    if not isinstance(condition_groups, list):
+        raise TypeError("condition_groups must be a list")
 
     if not condition_groups:
         return False
 
-    if not isinstance(condition_groups, list):
-        return False
-
-    try:
-        groups: list[ConditionGroup] = []
-        for group in condition_groups:
-            if isinstance(group, ConditionGroup):
-                groups.append(group)
-            elif isinstance(group, dict):
-                groups.append(ConditionGroup(**group))
-            else:
-                return False
-    except Exception:
-        return False
+    groups: list[ConditionGroup] = []
+    for group in condition_groups:
+        if isinstance(group, ConditionGroup):
+            groups.append(group)
+        elif isinstance(group, dict):
+            groups.append(ConditionGroup.model_validate(group))
+        else:
+            raise TypeError(
+                "condition groups must contain dictionaries or ConditionGroup models"
+            )
 
     return any(group.evaluate(game_state) for group in groups)

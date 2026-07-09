@@ -13,6 +13,18 @@ from talemate.game.primitives.anchors import (
     relationship_anchor,
     scene_anchor,
 )
+from talemate.game.primitives.conditions import (
+    PrimitiveCondition,
+    PrimitiveConditionGroup,
+    evaluate_condition_input,
+)
+from talemate.game.primitives.effects import (
+    Effect,
+    EffectBatchResult,
+    EffectResult,
+    apply_effect,
+    apply_effects,
+)
 from talemate.game.primitives.exceptions import (
     InvalidAnchorRef,
     InvalidPrimitiveRef,
@@ -24,14 +36,22 @@ from talemate.game.primitives.store import PrimitiveStore
 
 __all__ = [
     "AnchorRef",
+    "Effect",
+    "EffectBatchResult",
+    "EffectResult",
     "InvalidAnchorRef",
     "InvalidPrimitiveRef",
     "LedgerEntry",
     "PrimitiveError",
+    "PrimitiveCondition",
+    "PrimitiveConditionGroup",
     "PrimitiveRef",
     "PrimitiveStore",
     "PrimitiveStoreError",
+    "apply_effect",
+    "apply_effects",
     "character_anchor",
+    "evaluate_condition_input",
     "object_anchor",
     "relationship_anchor",
     "scene_anchor",

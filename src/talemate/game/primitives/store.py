@@ -177,6 +177,29 @@ class PrimitiveStore:
             return default
         return copy.deepcopy(primitive_kind[primitive_ref.id])
 
+    def set_anchor_tags(self, anchor: AnchorRef | str, tags: list[str]) -> None:
+        """Persist a validated tag list on an anchor.
+
+        Args:
+            anchor: Anchor reference object or canonical anchor string.
+            tags: Non-empty tag strings to store. Duplicate normalized tags are
+                removed while preserving order.
+
+        Raises:
+            PrimitiveStoreError: If any tag is not a non-empty string or the
+                persisted anchor data is invalid.
+        """
+        anchor_ref = self._coerce_anchor(anchor)
+        clean_tags = []
+        for tag in tags:
+            if not isinstance(tag, str) or not tag.strip():
+                raise PrimitiveStoreError("Anchor tags must be non-empty strings")
+            normalized = tag.strip()
+            if normalized not in clean_tags:
+                clean_tags.append(normalized)
+        payload = self._get_anchor_payload(anchor_ref, create=True)
+        payload["tags"] = clean_tags
+
     def set_primitive(self, ref: PrimitiveRef | str, value: dict) -> None:
         """Persist a primitive payload at the referenced anchor path.
 

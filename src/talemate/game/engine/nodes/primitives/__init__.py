@@ -45,3 +45,7 @@ class DebugPing(Node):
             ``message="game-primitives"`` to its output sockets.
         """
         self.set_output_values({"ok": True, "message": "game-primitives"})
+
+
+import talemate.game.engine.nodes.primitives.conditions  # noqa: E402,F401
+import talemate.game.engine.nodes.primitives.effects  # noqa: E402,F401
