@@ -40,6 +40,10 @@ from talemate.game.primitives.exceptions import (
 )
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.modifiers import RollModifier
+from talemate.game.primitives.relationships import (
+    RelationshipDimension,
+    RelationshipGraph,
+)
 from talemate.game.primitives.roll_tables import (
     RollTableDefinition,
     RollTableEngine,
@@ -68,6 +72,8 @@ __all__ = [
     "PrimitiveConditionGroup",
     "PrimitiveRef",
     "RollModifier",
+    "RelationshipDimension",
+    "RelationshipGraph",
     "RollTableDefinition",
     "RollTableEngine",
     "RollTableRow",

@@ -385,6 +385,24 @@ class PrimitiveStore:
             raise PrimitiveStoreError("ledger limit must be a positive integer")
         return copy.deepcopy(self._validated_ledger_payloads()[-limit:])
 
+    def iter_anchor_keys(self, kind: str | None = None) -> list[str]:
+        """Return validated anchor keys, optionally filtered by anchor kind."""
+        self.ensure_shape()
+        keys = []
+        for key in self.root["anchors"]:
+            anchor = AnchorRef.parse(key)
+            if kind is None or anchor.kind == kind:
+                keys.append(anchor.key())
+        return keys
+
+    def iter_primitives(self, anchor: AnchorRef | str, kind: str) -> dict[str, Any]:
+        """Return primitive payloads of a given kind under an anchor."""
+        anchor_payload = self.get_anchor(anchor)
+        if anchor_payload is None:
+            return {}
+        primitives = anchor_payload.get("primitives", {})
+        return copy.deepcopy(primitives.get(kind, {}))
+
     def _replace_root(self, payload: dict[str, Any]) -> None:
         """Replace root contents while preserving the original dict object."""
         if not isinstance(self._root, dict):

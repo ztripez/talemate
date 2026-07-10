@@ -50,5 +50,6 @@ class DebugPing(Node):
 import talemate.game.engine.nodes.primitives.conditions  # noqa: E402,F401
 import talemate.game.engine.nodes.primitives.decks  # noqa: E402,F401
 import talemate.game.engine.nodes.primitives.effects  # noqa: E402,F401
+import talemate.game.engine.nodes.primitives.relationships  # noqa: E402,F401
 import talemate.game.engine.nodes.primitives.roll_tables  # noqa: E402,F401
 import talemate.game.engine.nodes.primitives.selection  # noqa: E402,F401

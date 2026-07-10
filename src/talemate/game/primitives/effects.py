@@ -180,7 +180,7 @@ def _apply_primitive_effect(store: PrimitiveStore, effect: Effect) -> EffectResu
     previous_value = primitive_payload_value(previous_payload)
 
     if effect.op == "set":
-        current_payload = primitive_value_payload(effect.value)
+        current_payload = _updated_value_payload(ref, previous_payload, effect.value)
     elif effect.op == "unset":
         existed = store.delete_primitive(ref)
         return EffectResult(
@@ -198,8 +198,10 @@ def _apply_primitive_effect(store: PrimitiveStore, effect: Effect) -> EffectResu
         base = 0 if previous_value is None else previous_value
         if not isinstance(base, (int, float)) or isinstance(base, bool):
             raise PrimitiveError(f"Effect {effect.op} target value must be numeric")
-        current_payload = primitive_value_payload(
-            base + amount if effect.op == "inc" else base - amount
+        current_payload = _updated_value_payload(
+            ref,
+            previous_payload,
+            base + amount if effect.op == "inc" else base - amount,
         )
     elif effect.op in {"append", "extend"}:
         values = (
@@ -229,3 +231,18 @@ def _require_list(value: Any, op: str) -> list:
     if not isinstance(value, list):
         raise PrimitiveError(f"Effect {op} target value must be a list")
     return value
+
+
+def _updated_value_payload(
+    ref: PrimitiveRef, previous_payload: Any, value: Any
+) -> dict[str, Any]:
+    """Return a value payload preserving existing value-bearing metadata."""
+    if ref.anchor.kind == "relationship" and ref.kind == "meters":
+        from talemate.game.primitives.relationships import relationship_value_payload
+
+        return relationship_value_payload(ref, previous_payload, value)
+    if isinstance(previous_payload, dict) and "value" in previous_payload:
+        payload = copy.deepcopy(previous_payload)
+        payload["value"] = copy.deepcopy(value)
+        return payload
+    return primitive_value_payload(value)

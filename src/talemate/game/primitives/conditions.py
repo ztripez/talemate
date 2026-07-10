@@ -70,6 +70,11 @@ class PrimitiveCondition(pydantic.BaseModel):
             else:
                 _anchored_ref(self.anchor, "meters", self.dimension)
         elif self.kind == "relationship":
+            anchor = AnchorRef.parse(
+                _require_text(self.anchor, "relationship condition requires anchor")
+            )
+            if anchor.kind != "relationship":
+                raise ValueError("relationship condition requires relationship anchor")
             _anchored_ref(self.anchor, "meters", self.dimension)
         elif self.kind == "clock_complete":
             if self.path:
