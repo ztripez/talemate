@@ -12,6 +12,7 @@ These tests exercise:
 - `condition_groups_match` wire format normalization.
 """
 
+import pydantic
 import pytest
 
 from talemate.game.schema import (
@@ -19,7 +20,6 @@ from talemate.game.schema import (
     ConditionGroup,
     condition_groups_match,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -64,10 +64,11 @@ class TestConditionPathResolution:
         c = Condition(path="absent/leaf", operator="==", value="x")
         assert c.evaluate(state) is False
 
-    def test_empty_path_returns_false(self, state):
-        # split_state_path raises ValueError on empty -> caught -> False
+    def test_empty_path_raises_value_error(self, state):
+        """An empty condition path fails loudly instead of becoming a non-match."""
         c = Condition(path="", operator="==", value=1)
-        assert c.evaluate(state) is False
+        with pytest.raises(ValueError, match="Path name cannot be empty"):
+            c.evaluate(state)
 
     def test_leading_slash_is_stripped(self, state):
         c = Condition(path="/stats/hp", operator="==", value=50)
@@ -263,13 +264,11 @@ class TestMembershipOperators:
 
 
 class TestExceptionSafety:
-    def test_exception_during_evaluate_returns_false(self, state):
-        # Trigger TypeError via "in" against non-iterable -> caught -> False
+    def test_invalid_membership_container_raises_type_error(self, state):
+        """Membership against a non-iterable value fails loudly."""
         c = Condition(path="stats/hp", operator="in", value="ignored")
-        # state hp=50 (int), value="ignored" (str), neither numeric on RHS,
-        # mixed branch sets right=str("ignored") and tries `right in left`
-        # where left=50 -> TypeError -> caught -> False
-        assert c.evaluate(state) is False
+        with pytest.raises(TypeError, match="not iterable"):
+            c.evaluate(state)
 
 
 # ---------------------------------------------------------------------------
@@ -336,9 +335,11 @@ class TestConditionGroupsMatch:
     def test_empty_list_returns_false(self, state):
         assert condition_groups_match([], state) is False
 
-    def test_non_list_returns_false(self, state):
-        assert condition_groups_match("not a list", state) is False
-        assert condition_groups_match({"groups": []}, state) is False
+    def test_non_list_raises_type_error(self, state):
+        """A malformed condition-group container fails loudly."""
+        for malformed in ("not a list", {"groups": []}):
+            with pytest.raises(TypeError, match="must be a list"):
+                condition_groups_match(malformed, state)
 
     def test_wire_format_dict_groups(self, state):
         groups = [
@@ -381,17 +382,19 @@ class TestConditionGroupsMatch:
         ]
         assert condition_groups_match(groups, state) is True
 
-    def test_invalid_group_element_returns_false(self, state):
+    def test_invalid_group_element_raises_type_error(self, state):
+        """A malformed group element fails loudly."""
         groups = [
             {"operator": "and", "conditions": []},
             "totally invalid",
         ]
-        # On encountering non-dict non-Group element, returns False
-        assert condition_groups_match(groups, state) is False
+        with pytest.raises(TypeError, match="dictionaries or ConditionGroup"):
+            condition_groups_match(groups, state)
 
-    def test_invalid_condition_dict_swallowed_returns_false(self, state):
-        # Missing required fields -> ValidationError -> caught -> False
+    def test_invalid_condition_dict_raises_validation_error(self, state):
+        """An invalid condition payload surfaces Pydantic validation errors."""
         groups = [
             {"operator": "and", "conditions": [{"oops": True}]},
         ]
-        assert condition_groups_match(groups, state) is False
+        with pytest.raises(pydantic.ValidationError):
+            condition_groups_match(groups, state)

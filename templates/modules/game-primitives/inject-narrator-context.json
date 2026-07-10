@@ -1,0 +1,55 @@
+{
+  "title": "Inject Game Primitives Narrator Context",
+  "id": "41ae5bb2-b621-49c1-84a8-576b7f24641d",
+  "properties": {
+    "event_name": "agent.narrator.inject_instructions"
+  },
+  "x": 0,
+  "y": 0,
+  "width": 200,
+  "height": 100,
+  "collapsed": false,
+  "inherited": false,
+  "registry": "game/primitives/injectNarratorContext",
+  "nodes": {
+    "a2a48408-c5eb-42ae-8305-0e4f8d51bc68": {
+      "title": "Event",
+      "id": "a2a48408-c5eb-42ae-8305-0e4f8d51bc68",
+      "properties": {},
+      "x": 20,
+      "y": 40,
+      "width": 140,
+      "height": 40,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "event/Event",
+      "base_type": "core/Graph"
+    },
+    "c2f68017-632d-43e3-b3d6-f770bf3f255e": {
+      "title": "Inject Narrator Context",
+      "id": "c2f68017-632d-43e3-b3d6-f770bf3f255e",
+      "properties": {},
+      "x": 260,
+      "y": 40,
+      "width": 280,
+      "height": 80,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "primitives/render/InjectNarratorContext",
+      "base_type": "core/Node"
+    }
+  },
+  "edges": {
+    "a2a48408-c5eb-42ae-8305-0e4f8d51bc68.event": [
+      "c2f68017-632d-43e3-b3d6-f770bf3f255e.event"
+    ]
+  },
+  "groups": [],
+  "comments": [],
+  "extends": null,
+  "base_type": "core/Event",
+  "inputs": [],
+  "outputs": [],
+  "module_properties": {},
+  "style": null
+}

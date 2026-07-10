@@ -1,0 +1,55 @@
+{
+  "title": "Inject Game Primitives Conversation Context",
+  "id": "6d68a17e-127d-498b-b95d-701747eb5769",
+  "properties": {
+    "event_name": "agent.conversation.inject_instructions"
+  },
+  "x": 0,
+  "y": 0,
+  "width": 200,
+  "height": 100,
+  "collapsed": false,
+  "inherited": false,
+  "registry": "game/primitives/injectConversationContext",
+  "nodes": {
+    "bcfe2003-1482-45b9-9032-5a5422b936d3": {
+      "title": "Event",
+      "id": "bcfe2003-1482-45b9-9032-5a5422b936d3",
+      "properties": {},
+      "x": 20,
+      "y": 40,
+      "width": 140,
+      "height": 40,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "event/Event",
+      "base_type": "core/Graph"
+    },
+    "136654bd-dd7b-438f-8a41-dbb21d26747a": {
+      "title": "Inject Conversation Context",
+      "id": "136654bd-dd7b-438f-8a41-dbb21d26747a",
+      "properties": {},
+      "x": 260,
+      "y": 40,
+      "width": 280,
+      "height": 80,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "primitives/render/InjectConversationContext",
+      "base_type": "core/Node"
+    }
+  },
+  "edges": {
+    "bcfe2003-1482-45b9-9032-5a5422b936d3.event": [
+      "136654bd-dd7b-438f-8a41-dbb21d26747a.event"
+    ]
+  },
+  "groups": [],
+  "comments": [],
+  "extends": null,
+  "base_type": "core/Event",
+  "inputs": [],
+  "outputs": [],
+  "module_properties": {},
+  "style": null
+}

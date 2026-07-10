@@ -20,17 +20,19 @@ via list_packages with a bogus install_node_module property.
 import json
 import os
 
+import pydantic
 import pytest
 
-from talemate.game.engine.nodes.core import Graph, UNRESOLVED
+from talemate.game.engine.nodes.core import UNRESOLVED, Graph, ModuleProperty, Node
 from talemate.game.engine.nodes.packaging import (
+    SCENE_PACKAGE_INFO_FILENAME,
     InstallNodeModule,
     Package,
     PackageData,
+    PackageInitializationError,
     PackageProperty,
     PromoteConfig,
     ScenePackageInfo,
-    SCENE_PACKAGE_INFO_FILENAME,
     apply_scene_package_info,
     get_package_by_registry,
     get_scene_package_info,
@@ -43,10 +45,8 @@ from talemate.game.engine.nodes.packaging import (
     uninstall_package,
     update_package_properties,
 )
-from talemate.game.engine.nodes.core import ModuleProperty
 from talemate.game.engine.nodes.scene import SceneLoop
 from talemate.tale_mate import Scene
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -193,6 +193,39 @@ def test_scene_package_info_has_and_get():
     assert info.has_package("missing/pkg") is False
     assert info.get_package("foo/bar") is pkg
     assert info.get_package("missing/pkg") is None
+
+
+def test_package_data_accepts_legacy_computed_configured_only():
+    """Persisted legacy configured values migrate while unrelated extras fail."""
+    payload = _sample_package_data().model_dump()
+    assert "configured" in payload
+
+    migrated = PackageData.model_validate(payload)
+
+    assert migrated.configured is True
+    payload["unknown"] = "rejected"
+    with pytest.raises(pydantic.ValidationError):
+        PackageData.model_validate(payload)
+
+
+def test_graph_remove_node_clears_surviving_input_source():
+    """Removing a producer clears sockets and source links on surviving consumers."""
+    graph = Graph()
+    producer = Node()
+    producer.add_output("value", socket_type="str")
+    consumer = Node()
+    consumer.add_input("value", socket_type="str")
+    graph.add_node(producer)
+    graph.add_node(consumer)
+    graph.connect(producer.outputs[0], consumer.inputs[0])
+
+    removed = graph.remove_node(producer.id)
+
+    assert removed is producer
+    assert producer.id not in graph.nodes
+    assert producer.outputs[0].id not in graph.sockets
+    assert consumer.inputs[0].source is None
+    assert graph.edges == {}
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +416,7 @@ def package_test_classes():
     """Register an installable Package, an InstallNodeModule child, and a
     PromoteConfig child against the global registry for the duration of a
     test, then unregister to keep the global namespace clean."""
-    from talemate.game.engine.nodes.registry import register, NODES
+    from talemate.game.engine.nodes.registry import NODES, register
 
     # Register an installable target node module (must exist at registry lookup)
     @register("test/pkg/InstallableModule")
@@ -495,7 +528,7 @@ async def test_list_packages_returns_only_installable_and_resolves_promoted_prop
 async def test_list_packages_records_error_for_missing_module_property():
     """When PromoteConfig points at a property that doesn't exist on the
     target module, list_packages records an error and skips the property."""
-    from talemate.game.engine.nodes.registry import register, NODES
+    from talemate.game.engine.nodes.registry import NODES, register
 
     @register("test/pkg/EmptyModule")
     class EmptyModule(Graph):
@@ -584,6 +617,7 @@ async def test_initialize_package_adds_node_with_promoted_property_value(
     )
 
     before_count = len(scene_loop.nodes)
+    await install_package(scene, pkg)
     await initialize_package(scene, scene_loop, pkg)
     after_count = len(scene_loop.nodes)
 
@@ -599,11 +633,10 @@ async def test_initialize_package_adds_node_with_promoted_property_value(
 
 
 @pytest.mark.asyncio
-async def test_initialize_packages_skips_unconfigured_and_errored_packages(
+async def test_initialize_packages_rejects_unconfigured_and_errored_packages(
     package_test_classes, scene
 ):
-    """initialize_packages must skip packages with required-but-unset props
-    or with errors. Successful ones still install their nodes."""
+    """Package batch initialization rejects invalid installed package metadata."""
     scene_loop = SceneLoop()
 
     # 1) Configured + clean — should install
@@ -665,18 +698,11 @@ async def test_initialize_packages_skips_unconfigured_and_errored_packages(
     info = ScenePackageInfo(packages=[good, unconfigured, errored])
     await save_scene_package_info(scene, info)
 
-    before = len(scene_loop.nodes)
-    await initialize_packages(scene, scene_loop)
-    after = len(scene_loop.nodes)
+    before = set(scene_loop.nodes)
+    with pytest.raises(PackageInitializationError, match="r/unconfigured"):
+        await initialize_packages(scene, scene_loop)
 
-    # only `good` should have added a node
-    assert after - before == 1
-    installed_registries = [
-        n.registry
-        for n in scene_loop.nodes.values()
-        if n.registry == "test/pkg/InstallableModule"
-    ]
-    assert installed_registries == ["test/pkg/InstallableModule"]
+    assert set(scene_loop.nodes) == before
 
 
 # ---------------------------------------------------------------------------

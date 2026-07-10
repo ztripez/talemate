@@ -1,29 +1,30 @@
-import pydantic
-import uuid
-from typing import Any, Callable, ClassVar, Annotated
-import networkx as nx
-import contextvars
 import asyncio
-import structlog
-import traceback
+import contextvars
 import json
-import time
-import reprlib
 import re
+import reprlib
+import time
+import traceback
+import uuid
 from enum import IntEnum
+from typing import Annotated, Any, Callable, ClassVar
 
-from talemate.game.engine.nodes.base_types import base_node_type, BASE_TYPES
-from talemate.game.engine.nodes.registry import get_node, register
+import networkx as nx
+import pydantic
+import structlog
+
+import talemate.emit.async_signals as async_signals
+from talemate.context import active_scene
 from talemate.exceptions import (
+    ActedAsCharacter,
     ExitScene,
+    GenerationCancelled,
     ResetScene,
     RestartSceneLoop,
-    ActedAsCharacter,
-    GenerationCancelled,
 )
-import talemate.emit.async_signals as async_signals
+from talemate.game.engine.nodes.base_types import BASE_TYPES, base_node_type
+from talemate.game.engine.nodes.registry import get_node, register
 from talemate.util.async_tools import shared_debounce
-from talemate.context import active_scene
 
 log = structlog.get_logger("talemate.game.engine.nodes.core")
 
@@ -747,8 +748,20 @@ class NodeBase(pydantic.BaseModel):
 
         return values
 
-    def set_output_values(self, values: dict[str, Any]):
-        """Set output values by socket name"""
+    def set_output_values(self, values: dict[str, Any] | pydantic.BaseModel) -> None:
+        """Set output values from a mapping or validated Pydantic model.
+
+        Pydantic models are treated as runtime value containers rather than
+        serialized payloads, preserving objects such as dynamic instructions.
+
+        Args:
+            values: Mapping or validated model whose field names match output sockets.
+
+        Returns:
+            None.
+        """
+        if isinstance(values, pydantic.BaseModel):
+            values = dict(values)
         for socket in self.outputs:
             if socket.name in values:
                 socket.value = values[socket.name]
@@ -1748,6 +1761,37 @@ class Graph(NodeBase):
 
         for socket in node.inputs + node.outputs:
             self.sockets[socket.id] = socket
+
+    def remove_node(self, node_id: str) -> NodeBase:
+        """Remove a node, its sockets, and every edge involving those sockets.
+
+        Args:
+            node_id: Identifier of the node to remove.
+
+        Returns:
+            Removed node instance.
+
+        Raises:
+            KeyError: If ``node_id`` is not present in the graph.
+        """
+        node = self.nodes.pop(node_id)
+        sockets = node.inputs + node.outputs
+        socket_ids = {socket.id for socket in sockets}
+        socket_full_ids = {socket.full_id for socket in sockets}
+        for socket_id in socket_ids:
+            self.sockets.pop(socket_id)
+        self.edges = {
+            output_id: [
+                input_id for input_id in input_ids if input_id not in socket_full_ids
+            ]
+            for output_id, input_ids in self.edges.items()
+            if output_id not in socket_full_ids
+        }
+        for surviving_node in self.nodes.values():
+            for socket in surviving_node.inputs:
+                if socket.source and socket.source.full_id in socket_full_ids:
+                    socket.source = None
+        return node
 
     def connect(self, output_socket: Socket | str, input_socket: Socket | str):
         """

@@ -1,0 +1,55 @@
+{
+  "title": "Initialize Game Primitives",
+  "id": "3f00d808-e194-4836-abd8-69d915af9361",
+  "properties": {
+    "event_name": "scene_loop_init"
+  },
+  "x": 0,
+  "y": 0,
+  "width": 200,
+  "height": 100,
+  "collapsed": false,
+  "inherited": false,
+  "registry": "game/primitives/initialize",
+  "nodes": {
+    "39b48d05-8662-4d31-b254-e30344a99d12": {
+      "title": "Event",
+      "id": "39b48d05-8662-4d31-b254-e30344a99d12",
+      "properties": {},
+      "x": 20,
+      "y": 40,
+      "width": 140,
+      "height": 40,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "event/Event",
+      "base_type": "core/Graph"
+    },
+    "50bdba7b-e43e-4d25-9efe-42ca7fc90dce": {
+      "title": "Initialize Store",
+      "id": "50bdba7b-e43e-4d25-9efe-42ca7fc90dce",
+      "properties": {},
+      "x": 240,
+      "y": 40,
+      "width": 220,
+      "height": 80,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "primitives/render/InitializeStore",
+      "base_type": "core/Node"
+    }
+  },
+  "edges": {
+    "39b48d05-8662-4d31-b254-e30344a99d12.event": [
+      "50bdba7b-e43e-4d25-9efe-42ca7fc90dce.event"
+    ]
+  },
+  "groups": [],
+  "comments": [],
+  "extends": null,
+  "base_type": "core/Event",
+  "inputs": [],
+  "outputs": [],
+  "module_properties": {},
+  "style": null
+}

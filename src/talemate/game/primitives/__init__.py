@@ -1,8 +1,9 @@
-"""Provide the public namespace for deterministic Game Primitives runtime code.
+"""Expose deterministic Game Primitives runtime and prompt-context APIs.
 
-Game Primitives are deterministic game-runtime building blocks for storage,
-references, effects, roll tables, deck selection, and shared selection result
-payloads. Importing this package does not mutate scene state.
+Game Primitives provide deterministic storage, references, attributes, effects,
+relationships, roll tables, deck selection, shared selection results, and
+prompt-safe rendering of primitive state for agent instructions. Importing this
+package does not mutate scene state.
 """
 
 from talemate.game.primitives.anchors import (
@@ -23,6 +24,11 @@ from talemate.game.primitives.conditions import (
     PrimitiveCondition,
     PrimitiveConditionGroup,
     evaluate_condition_input,
+)
+from talemate.game.primitives.context import (
+    PrimitiveContextDebug,
+    PrimitiveContextRenderer,
+    PrimitiveRenderedContext,
 )
 from talemate.game.primitives.decks import (
     DeckCard,
@@ -79,6 +85,9 @@ __all__ = [
     "PrimitiveError",
     "PrimitiveCondition",
     "PrimitiveConditionGroup",
+    "PrimitiveContextDebug",
+    "PrimitiveContextRenderer",
+    "PrimitiveRenderedContext",
     "PrimitiveRef",
     "RollModifier",
     "RelationshipDimension",

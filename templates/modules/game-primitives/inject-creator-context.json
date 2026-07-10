@@ -1,0 +1,55 @@
+{
+  "title": "Inject Game Primitives Creator Context",
+  "id": "43266619-a222-4631-a5f4-a19a3880d840",
+  "properties": {
+    "event_name": "agent.creator.contextual_generate.before"
+  },
+  "x": 0,
+  "y": 0,
+  "width": 200,
+  "height": 100,
+  "collapsed": false,
+  "inherited": false,
+  "registry": "game/primitives/injectCreatorContext",
+  "nodes": {
+    "8ad7ea2e-3f2b-461c-98e7-2f392c194eb4": {
+      "title": "Event",
+      "id": "8ad7ea2e-3f2b-461c-98e7-2f392c194eb4",
+      "properties": {},
+      "x": 20,
+      "y": 40,
+      "width": 140,
+      "height": 40,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "event/Event",
+      "base_type": "core/Graph"
+    },
+    "ba06344d-a5bd-4af4-81ff-ceca9c32c77f": {
+      "title": "Inject Creator Context",
+      "id": "ba06344d-a5bd-4af4-81ff-ceca9c32c77f",
+      "properties": {},
+      "x": 260,
+      "y": 40,
+      "width": 280,
+      "height": 80,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "primitives/render/InjectCreatorContext",
+      "base_type": "core/Node"
+    }
+  },
+  "edges": {
+    "8ad7ea2e-3f2b-461c-98e7-2f392c194eb4.event": [
+      "ba06344d-a5bd-4af4-81ff-ceca9c32c77f.event"
+    ]
+  },
+  "groups": [],
+  "comments": [],
+  "extends": null,
+  "base_type": "core/Event",
+  "inputs": [],
+  "outputs": [],
+  "module_properties": {},
+  "style": null
+}

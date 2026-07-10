@@ -1,0 +1,89 @@
+{
+  "title": "Game Primitives Package",
+  "id": "ac53ac6b-860c-4c04-a82a-429fd2b665e8",
+  "properties": {
+    "package_name": "Game Primitives",
+    "author": "Talemate",
+    "description": "Inject prompt-safe relevant Game Primitives context into agent prompts.",
+    "installable": true,
+    "restart_scene_loop": true
+  },
+  "x": 0,
+  "y": 0,
+  "width": 240,
+  "height": 120,
+  "collapsed": false,
+  "inherited": false,
+  "registry": "package/talemate/GamePrimitives",
+  "nodes": {
+    "603c44d7-cf36-4629-88d3-9b87b668052f": {
+      "title": "Install Initialize Listener",
+      "id": "603c44d7-cf36-4629-88d3-9b87b668052f",
+      "properties": {
+        "node_registry": "game/primitives/initialize"
+      },
+      "x": 20,
+      "y": 40,
+      "width": 300,
+      "height": 60,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "util/packaging/InstallNodeModule",
+      "base_type": "core/Node"
+    },
+    "80e9b26a-6ce9-4908-8322-f78aaacb14f1": {
+      "title": "Install Conversation Listener",
+      "id": "80e9b26a-6ce9-4908-8322-f78aaacb14f1",
+      "properties": {
+        "node_registry": "game/primitives/injectConversationContext"
+      },
+      "x": 20,
+      "y": 130,
+      "width": 300,
+      "height": 60,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "util/packaging/InstallNodeModule",
+      "base_type": "core/Node"
+    },
+    "e91fcf08-b53b-473c-8234-0db9730a4305": {
+      "title": "Install Narrator Listener",
+      "id": "e91fcf08-b53b-473c-8234-0db9730a4305",
+      "properties": {
+        "node_registry": "game/primitives/injectNarratorContext"
+      },
+      "x": 20,
+      "y": 220,
+      "width": 300,
+      "height": 60,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "util/packaging/InstallNodeModule",
+      "base_type": "core/Node"
+    },
+    "5937c443-b677-40fa-8181-25e0ca3f9447": {
+      "title": "Install Creator Listener",
+      "id": "5937c443-b677-40fa-8181-25e0ca3f9447",
+      "properties": {
+        "node_registry": "game/primitives/injectCreatorContext"
+      },
+      "x": 20,
+      "y": 310,
+      "width": 300,
+      "height": 60,
+      "collapsed": false,
+      "inherited": false,
+      "registry": "util/packaging/InstallNodeModule",
+      "base_type": "core/Node"
+    }
+  },
+  "edges": {},
+  "groups": [],
+  "comments": [],
+  "extends": null,
+  "base_type": "util/packaging/Package",
+  "inputs": [],
+  "outputs": [],
+  "module_properties": {},
+  "style": null
+}
