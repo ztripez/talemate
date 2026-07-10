@@ -32,6 +32,15 @@ from talemate.game.primitives.exceptions import (
     PrimitiveStoreError,
 )
 from talemate.game.primitives.ledger import LedgerEntry
+from talemate.game.primitives.modifiers import RollModifier
+from talemate.game.primitives.roll_tables import (
+    RollTableDefinition,
+    RollTableEngine,
+    RollTableRow,
+    parse_dice,
+    parse_range,
+)
+from talemate.game.primitives.selection import SelectionResult
 from talemate.game.primitives.store import PrimitiveStore
 
 __all__ = [
@@ -46,6 +55,11 @@ __all__ = [
     "PrimitiveCondition",
     "PrimitiveConditionGroup",
     "PrimitiveRef",
+    "RollModifier",
+    "RollTableDefinition",
+    "RollTableEngine",
+    "RollTableRow",
+    "SelectionResult",
     "PrimitiveStore",
     "PrimitiveStoreError",
     "apply_effect",
@@ -53,6 +67,8 @@ __all__ = [
     "character_anchor",
     "evaluate_condition_input",
     "object_anchor",
+    "parse_dice",
+    "parse_range",
     "relationship_anchor",
     "scene_anchor",
 ]

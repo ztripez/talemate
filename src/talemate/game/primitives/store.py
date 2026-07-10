@@ -200,6 +200,46 @@ class PrimitiveStore:
         payload = self._get_anchor_payload(anchor_ref, create=True)
         payload["tags"] = clean_tags
 
+    def get_definition(self, kind: str, definition_id: str, default: Any = None) -> Any:
+        """Return a primitive definition payload by kind and id.
+
+        Args:
+            kind: Definition collection name, such as ``"roll_tables"``.
+            definition_id: Definition identifier within the collection.
+            default: Value returned when the definition is absent.
+
+        Returns:
+            Deep copy of the definition payload or ``default`` when absent.
+
+        Raises:
+            PrimitiveStoreError: If the persisted root shape is invalid.
+        """
+        self.ensure_shape()
+        definitions = self.root["definitions"]
+        if kind not in definitions or definition_id not in definitions[kind]:
+            return default
+        return copy.deepcopy(definitions[kind][definition_id])
+
+    def set_definition(self, kind: str, definition_id: str, value: dict) -> None:
+        """Persist a primitive definition payload by kind and id.
+
+        Args:
+            kind: Definition collection name, such as ``"roll_tables"``.
+            definition_id: Definition identifier within the collection.
+            value: JSON-compatible definition object.
+
+        Raises:
+            PrimitiveStoreError: If the root shape or definition payload is
+                invalid.
+        """
+        self.ensure_shape()
+        definition_payload = self._coerce_definition_payload(kind, definition_id, value)
+        definitions = self.root["definitions"]
+        if kind not in definitions:
+            definitions[kind] = {}
+        definitions[kind][definition_id] = definition_payload
+        self.ensure_shape()
+
     def set_primitive(self, ref: PrimitiveRef | str, value: dict) -> None:
         """Persist a primitive payload at the referenced anchor path.
 
@@ -388,6 +428,25 @@ class PrimitiveStore:
             return PrimitivePayload.model_validate(value).model_dump(mode="json")
         except pydantic.ValidationError as exc:
             raise PrimitiveStoreError(f"Invalid primitive payload: {exc}") from exc
+
+    def _coerce_definition_payload(
+        self, kind: str, definition_id: str, value: Any
+    ) -> dict[str, Any]:
+        """Validate a definition payload with kind-specific schemas when known."""
+        try:
+            if kind == "roll_tables":
+                from talemate.game.primitives.roll_tables import RollTableDefinition
+
+                return RollTableDefinition.model_validate(value).model_dump(mode="json")
+            if kind == "modifiers":
+                from talemate.game.primitives.modifiers import RollModifier
+
+                return RollModifier.model_validate(value).model_dump(mode="json")
+            return self._coerce_primitive_payload(value)
+        except (pydantic.ValidationError, ValueError) as exc:
+            raise PrimitiveStoreError(
+                f"Invalid primitive definition {kind}/{definition_id}: {exc}"
+            ) from exc
 
     def _coerce_ledger_payload(self, entry: LedgerEntry | dict) -> dict[str, Any]:
         """Validate and serialize a primitive ledger entry payload."""
