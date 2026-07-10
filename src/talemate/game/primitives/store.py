@@ -204,7 +204,8 @@ class PrimitiveStore:
         """Return a primitive definition payload by kind and id.
 
         Args:
-            kind: Definition collection name, such as ``"roll_tables"``.
+            kind: Definition collection name. Known schema-validated kinds
+                include ``"roll_tables"``, ``"modifiers"``, and ``"decks"``.
             definition_id: Definition identifier within the collection.
             default: Value returned when the definition is absent.
 
@@ -224,7 +225,8 @@ class PrimitiveStore:
         """Persist a primitive definition payload by kind and id.
 
         Args:
-            kind: Definition collection name, such as ``"roll_tables"``.
+            kind: Definition collection name. Known schema-validated kinds
+                include ``"roll_tables"``, ``"modifiers"``, and ``"decks"``.
             definition_id: Definition identifier within the collection.
             value: JSON-compatible definition object.
 
@@ -253,37 +255,21 @@ class PrimitiveStore:
                 persisted anchor data is invalid, the persisted ledger is
                 invalid, or ``max_ledger_length`` is not a positive integer.
         """
-        payload = self._coerce_primitive_payload(value)
-        self._validate_ledger_limit(self.max_ledger_length)
+        self._set_primitive_payload(ref, value, ledger_op="primitive.set")
 
-        primitive_ref = self._coerce_primitive(ref)
-        anchor_payload = self._get_anchor_payload(primitive_ref.anchor, create=False)
-        primitive_kind = None
-        if anchor_payload is not None:
-            primitive_kind = self._get_primitive_kind_payload(
-                anchor_payload, primitive_ref.kind, create=False
-            )
-        previous = (
-            None
-            if primitive_kind is None
-            else copy.deepcopy(primitive_kind.get(primitive_ref.id))
-        )
-        ledger_payload = self._coerce_ledger_payload(
-            LedgerEntry(
-                op="primitive.set",
-                ref=primitive_ref.key(),
-                input={"value": payload},
-                output={"previous": previous, "current": payload},
-            )
-        )
-        next_ledger = self._prepare_ledger_after_append(ledger_payload)
+    def set_runtime_primitive(self, ref: PrimitiveRef | str, value: dict) -> None:
+        """Persist primitive runtime state without appending a ledger entry.
 
-        anchor_payload = self._get_anchor_payload(primitive_ref.anchor, create=True)
-        primitive_kind = self._get_primitive_kind_payload(
-            anchor_payload, primitive_ref.kind, create=True
-        )
-        primitive_kind[primitive_ref.id] = copy.deepcopy(payload)
-        self.root["ledger"] = next_ledger
+        Args:
+            ref: Primitive reference object or string key for the runtime state.
+            value: JSON-compatible primitive payload dictionary.
+
+        Raises:
+            InvalidPrimitiveRef: If ``ref`` is a string that cannot be parsed.
+            PrimitiveStoreError: If ``value`` is not a JSON-compatible object or
+                persisted anchor data is invalid.
+        """
+        self._set_primitive_payload(ref, value, ledger_op=None)
 
     def delete_primitive(self, ref: PrimitiveRef | str) -> bool:
         """Delete a primitive payload if it exists.
@@ -325,6 +311,45 @@ class PrimitiveStore:
         primitive_kind.pop(primitive_ref.id)
         self.root["ledger"] = next_ledger
         return True
+
+    def _set_primitive_payload(
+        self, ref: PrimitiveRef | str, value: dict, *, ledger_op: str | None
+    ) -> None:
+        """Persist a primitive payload with optional ledger recording."""
+        payload = self._coerce_primitive_payload(value)
+        self._validate_ledger_limit(self.max_ledger_length)
+
+        primitive_ref = self._coerce_primitive(ref)
+        anchor_payload = self._get_anchor_payload(primitive_ref.anchor, create=False)
+        primitive_kind = None
+        if anchor_payload is not None:
+            primitive_kind = self._get_primitive_kind_payload(
+                anchor_payload, primitive_ref.kind, create=False
+            )
+        previous = (
+            None
+            if primitive_kind is None
+            else copy.deepcopy(primitive_kind.get(primitive_ref.id))
+        )
+        next_ledger = None
+        if ledger_op is not None:
+            ledger_payload = self._coerce_ledger_payload(
+                LedgerEntry(
+                    op=ledger_op,
+                    ref=primitive_ref.key(),
+                    input={"value": payload},
+                    output={"previous": previous, "current": payload},
+                )
+            )
+            next_ledger = self._prepare_ledger_after_append(ledger_payload)
+
+        anchor_payload = self._get_anchor_payload(primitive_ref.anchor, create=True)
+        primitive_kind = self._get_primitive_kind_payload(
+            anchor_payload, primitive_ref.kind, create=True
+        )
+        primitive_kind[primitive_ref.id] = copy.deepcopy(payload)
+        if next_ledger is not None:
+            self.root["ledger"] = next_ledger
 
     def append_ledger(self, entry: LedgerEntry | dict) -> None:
         """Append a JSON-serializable operation entry to the primitive ledger.
@@ -442,6 +467,10 @@ class PrimitiveStore:
                 from talemate.game.primitives.modifiers import RollModifier
 
                 return RollModifier.model_validate(value).model_dump(mode="json")
+            if kind == "decks":
+                from talemate.game.primitives.decks import DeckDefinition
+
+                return DeckDefinition.model_validate(value).model_dump(mode="json")
             return self._coerce_primitive_payload(value)
         except (pydantic.ValidationError, ValueError) as exc:
             raise PrimitiveStoreError(
