@@ -35,8 +35,10 @@ from talemate.game.primitives.decks import (
     DeckDefinition,
     DeckDrawOptions,
     DeckEngine,
+    DeckInstancePayload,
     DeckRuntimeState,
 )
+from talemate.game.primitives.definitions import MeterPayload
 from talemate.game.primitives.effects import (
     Effect,
     EffectBatchResult,
@@ -53,12 +55,13 @@ from talemate.game.primitives.exceptions import (
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.modifiers import RollModifier
 from talemate.game.primitives.relationships import (
-    RelationshipDimension,
     RelationshipGraph,
+    relationship_meter,
 )
 from talemate.game.primitives.roll_tables import (
     RollTableDefinition,
     RollTableEngine,
+    RollTableInstancePayload,
     RollTableRow,
     parse_dice,
     parse_range,
@@ -75,6 +78,7 @@ __all__ = [
     "DeckDefinition",
     "DeckDrawOptions",
     "DeckEngine",
+    "DeckInstancePayload",
     "DeckRuntimeState",
     "Effect",
     "EffectBatchResult",
@@ -90,10 +94,11 @@ __all__ = [
     "PrimitiveRenderedContext",
     "PrimitiveRef",
     "RollModifier",
-    "RelationshipDimension",
+    "MeterPayload",
     "RelationshipGraph",
     "RollTableDefinition",
     "RollTableEngine",
+    "RollTableInstancePayload",
     "RollTableRow",
     "SelectionResult",
     "PrimitiveStore",
@@ -106,6 +111,7 @@ __all__ = [
     "parse_dice",
     "parse_range",
     "relationship_anchor",
+    "relationship_meter",
     "relationship_participants",
     "scene_anchor",
 ]

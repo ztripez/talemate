@@ -145,13 +145,13 @@ def test_store_for_scene_migrates_partial_root_shape():
     """A partial existing root is filled without discarding authored data."""
     scene = Scene()
     scene.game_state.variables[GAME_PRIMITIVES_KEY] = {
-        "definitions": {"decks": {"poses": {"cards": []}}}
+        "definitions": {"relationship_models": {"poses": {"cards": []}}}
     }
 
     store = PrimitiveStore.for_scene(scene)
 
     assert store.root["version"] == CURRENT_VERSION
-    assert store.root["definitions"]["decks"] == {"poses": {"cards": []}}
+    assert store.root["definitions"]["relationship_models"] == {"poses": {"cards": []}}
     assert store.root["definitions"]["meters"] == {}
     assert store.root["anchors"] == {}
     assert store.root["runtime"] == {}
@@ -356,6 +356,20 @@ def test_store_rejects_non_dict_primitive_payload():
 
     with pytest.raises(PrimitiveStoreError):
         store.set_primitive("scene:main/meters/tension", 3)
+
+
+def test_store_definition_key_must_match_typed_model_id():
+    """Typed definition writes enforce the canonical key and model id invariant."""
+    store = PrimitiveStore.for_scene(Scene())
+
+    with pytest.raises(PrimitiveStoreError, match="must match id"):
+        store.set_definition(
+            "meters",
+            "focus",
+            {"id": "attention", "min": 0, "max": 5, "value": 2},
+        )
+
+    assert store.get_definition("meters", "focus") is None
 
 
 def test_store_rejects_non_json_primitive_payload_without_partial_write():

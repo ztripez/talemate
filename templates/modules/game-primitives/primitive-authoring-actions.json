@@ -1,0 +1,66 @@
+{
+  "title": "Create Primitive Draft",
+  "id": "5d57c6be-c17f-47db-b417-20c2ef318955",
+  "properties": {
+    "name": "create_primitive_draft",
+    "description": "Create an isolated draft for authoring game primitives.",
+    "instructions": "Create a primitive draft before adding definitions or anchored primitives.",
+    "example_json": "[{\"draft_id\": \"encounter-rules\"}]"
+  },
+  "x": 0,
+  "y": 0,
+  "width": 200,
+  "height": 100,
+  "collapsed": false,
+  "inherited": false,
+  "registry": "agents/director/chat/createPrimitiveDraft",
+  "nodes": {
+    "1d4a83a4-476f-4c00-937d-2780826dd279": {
+      "title": "draft_id",
+      "id": "1d4a83a4-476f-4c00-937d-2780826dd279",
+      "properties": {"name": "draft_id", "typ": "str", "instructions": "Optional stable draft id. Pass null to generate one."},
+      "x": 20, "y": 40, "width": 210, "height": 106, "collapsed": false, "inherited": false,
+      "registry": "agents/director/chat/ActionArgument", "base_type": "core/Node"
+    },
+    "8340b82b-d6ac-4ac7-b63e-cba43a978a01": {
+      "title": "Create Draft",
+      "id": "8340b82b-d6ac-4ac7-b63e-cba43a978a01",
+      "properties": {},
+      "x": 280, "y": 40, "width": 210, "height": 80, "collapsed": false, "inherited": false,
+      "registry": "primitives/authoring/CreateDraft", "base_type": "core/Node"
+    },
+    "8ea480a5-9e6e-4bf7-836f-e67daecf3e73": {
+      "title": "[Game Primitives] Create Draft",
+      "id": "8ea480a5-9e6e-4bf7-836f-e67daecf3e73",
+      "properties": {"group": "Game Primitives", "action_id": "game_primitives.create_draft", "action_title": "Create primitive draft", "description_chat": "Create an isolated primitive authoring draft.", "description_scene_direction": "Create an isolated primitive authoring draft.", "instruction_examples": ["Create a primitive draft named encounter-rules."], "availability": "both", "force_enabled": false},
+      "x": 540, "y": 40, "width": 300, "height": 226, "collapsed": false, "inherited": false,
+      "registry": "agents/director/chat/DirectorChatSubAction", "base_type": "core/Node"
+    },
+    "49d50cbb-9be0-45d8-9449-0d509b9f3f47": {
+      "title": "Return", "id": "49d50cbb-9be0-45d8-9449-0d509b9f3f47", "properties": {},
+      "x": 900, "y": 40, "width": 140, "height": 26, "collapsed": false, "inherited": false,
+      "registry": "core/functions/Return", "base_type": "core/Node"
+    }
+  },
+  "edges": {
+    "1d4a83a4-476f-4c00-937d-2780826dd279.value": ["8340b82b-d6ac-4ac7-b63e-cba43a978a01.draft_id"],
+    "8340b82b-d6ac-4ac7-b63e-cba43a978a01.draft": ["8ea480a5-9e6e-4bf7-836f-e67daecf3e73.state"],
+    "8ea480a5-9e6e-4bf7-836f-e67daecf3e73.state": ["49d50cbb-9be0-45d8-9449-0d509b9f3f47.value"]
+  },
+  "groups": [], "comments": [], "extends": null,
+  "base_type": "agents/director/DirectorChatAction",
+  "inputs": [],
+  "outputs": [
+    {"id": "216beaf1-5f82-4055-8a18-875594aa624c", "name": "fn", "optional": false, "group": null, "socket_type": "function"},
+    {"id": "d47d969e-f616-4093-a6b2-2eb8c919d43a", "name": "name", "optional": false, "group": null, "socket_type": "str"},
+    {"id": "7ecec434-30ee-4faa-b038-3005d8ba129e", "name": "allow_multiple_calls", "optional": false, "group": null, "socket_type": "bool"},
+    {"id": "fcb38792-9f2c-46d4-bf8d-651085e542d4", "name": "ai_callback", "optional": false, "group": null, "socket_type": "focal/callback"}
+  ],
+  "module_properties": {
+    "name": {"name": "name", "description": "The name of the action", "type": "str", "default": "", "choices": null, "readonly": false, "step": null, "min": null, "max": null, "ephemeral": false},
+    "description": {"name": "description", "description": "The description of the action", "type": "text", "default": "", "choices": null, "readonly": false, "step": null, "min": null, "max": null, "ephemeral": false},
+    "instructions": {"name": "instructions", "description": "The instructions for the action", "type": "text", "default": "", "choices": null, "readonly": false, "step": null, "min": null, "max": null, "ephemeral": false},
+    "example_json": {"name": "example_json", "description": "An example JSON payload for the action", "type": "text", "default": null, "choices": null, "readonly": false, "step": null, "min": null, "max": null, "ephemeral": false}
+  },
+  "style": {"title_color": "#573a2e", "node_color": "#392f2c", "icon": "F0295", "auto_title": null, "counterpart": null}
+}

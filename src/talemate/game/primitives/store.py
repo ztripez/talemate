@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
+from talemate.game.primitives.definitions import coerce_definition_payload
 from talemate.game.primitives.exceptions import PrimitiveStoreError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.schema import (
@@ -41,6 +42,7 @@ class PrimitiveStore:
         Raises:
             PrimitiveStoreError: If ``max_ledger_length`` is not a positive
                 integer.
+
         """
         self._validate_ledger_limit(max_ledger_length)
         self._root = root
@@ -66,6 +68,7 @@ class PrimitiveStore:
             PrimitiveStoreError: If ``max_ledger_length`` is not a positive
                 integer, or if existing primitive state has an invalid root shape
                 that cannot be safely migrated.
+
         """
         cls._validate_ledger_limit(max_ledger_length)
         variables = scene.game_state.variables
@@ -83,6 +86,7 @@ class PrimitiveStore:
 
         Returns:
             Canonical primitive root dictionary stored in ``game_state``.
+
         """
         return self._root
 
@@ -92,6 +96,7 @@ class PrimitiveStore:
         Raises:
             PrimitiveStoreError: If an existing container has an incompatible
                 type or the stored version is unsupported.
+
         """
         self._replace_root(self._coerce_root_payload(self.root))
 
@@ -101,8 +106,37 @@ class PrimitiveStore:
         Raises:
             PrimitiveStoreError: If an existing version value is missing support
                 or is not the current schema version.
+
         """
         self.ensure_shape()
+
+    def replace_validated_root(self, value: PrimitiveRootPayload | dict) -> None:
+        """Validate a candidate and atomically replace the persisted root contents.
+
+        Validation and normalization complete before the existing root dictionary
+        is mutated. The dictionary object referenced by scene state retains its
+        identity while all of its contents are replaced.
+
+        Args:
+            value: Complete primitive root model or dictionary to validate before
+                mutation.
+
+        Raises:
+            PrimitiveStoreError: If the candidate is not a valid current-version
+                primitive root payload.
+
+        Side Effects:
+            Replaces every value in the mutable primitive root persisted by the
+            associated scene while preserving the root dictionary identity.
+
+        """
+        raw = (
+            value.model_dump(mode="python")
+            if isinstance(value, PrimitiveRootPayload)
+            else value
+        )
+        normalized = self._coerce_root_payload(raw)
+        self._replace_root(normalized)
 
     def get_anchor(self, anchor: AnchorRef | str, create: bool = False) -> dict | None:
         """Return an anchor payload, optionally creating it.
@@ -119,6 +153,7 @@ class PrimitiveStore:
         Raises:
             InvalidAnchorRef: If ``anchor`` is a string that cannot be parsed.
             PrimitiveStoreError: If the persisted anchor payload is invalid.
+
         """
         anchor_ref = self._coerce_anchor(anchor)
         payload = self._get_anchor_payload(anchor_ref, create=create)
@@ -140,6 +175,7 @@ class PrimitiveStore:
         Raises:
             InvalidAnchorRef: If ``anchor`` is a string that cannot be parsed.
             PrimitiveStoreError: If the persisted anchor payload is invalid.
+
         """
         return copy.deepcopy(
             self._get_anchor_payload(self._coerce_anchor(anchor), create=True)
@@ -162,6 +198,7 @@ class PrimitiveStore:
             InvalidPrimitiveRef: If ``ref`` is a string that cannot be parsed.
             PrimitiveStoreError: If persisted anchor or primitive collection
                 data is invalid.
+
         """
         primitive_ref = self._coerce_primitive(ref)
         anchor_payload = self._get_anchor_payload(primitive_ref.anchor, create=False)
@@ -188,6 +225,7 @@ class PrimitiveStore:
         Raises:
             PrimitiveStoreError: If any tag is not a non-empty string or the
                 persisted anchor data is invalid.
+
         """
         anchor_ref = self._coerce_anchor(anchor)
         clean_tags = []
@@ -214,6 +252,7 @@ class PrimitiveStore:
 
         Raises:
             PrimitiveStoreError: If the persisted root shape is invalid.
+
         """
         self.ensure_shape()
         definitions = self.root["definitions"]
@@ -233,6 +272,7 @@ class PrimitiveStore:
         Raises:
             PrimitiveStoreError: If the root shape or definition payload is
                 invalid.
+
         """
         self.ensure_shape()
         definition_payload = self._coerce_definition_payload(kind, definition_id, value)
@@ -254,6 +294,7 @@ class PrimitiveStore:
             PrimitiveStoreError: If ``value`` is not a JSON-compatible object or
                 persisted anchor data is invalid, the persisted ledger is
                 invalid, or ``max_ledger_length`` is not a positive integer.
+
         """
         self._set_primitive_payload(ref, value, ledger_op="primitive.set")
 
@@ -268,6 +309,7 @@ class PrimitiveStore:
             InvalidPrimitiveRef: If ``ref`` is a string that cannot be parsed.
             PrimitiveStoreError: If ``value`` is not a JSON-compatible object or
                 persisted anchor data is invalid.
+
         """
         self._set_primitive_payload(ref, value, ledger_op=None)
 
@@ -285,6 +327,7 @@ class PrimitiveStore:
             PrimitiveStoreError: If persisted anchor or primitive collection
                 data is invalid, the persisted ledger is invalid, or
                 ``max_ledger_length`` is not a positive integer.
+
         """
         self._validate_ledger_limit(self.max_ledger_length)
         primitive_ref = self._coerce_primitive(ref)
@@ -361,6 +404,7 @@ class PrimitiveStore:
             PrimitiveStoreError: If the entry cannot be validated or serialized
                 as JSON-compatible data, the persisted ledger is invalid, or
                 ``max_ledger_length`` is not a positive integer.
+
         """
         self._validate_ledger_limit(self.max_ledger_length)
         ledger_payload = self._coerce_ledger_payload(entry)
@@ -380,13 +424,26 @@ class PrimitiveStore:
         Raises:
             PrimitiveStoreError: If ``limit`` is not a positive integer or the
                 persisted ledger contains invalid entries.
+
         """
         if type(limit) is not int or limit < 1:
             raise PrimitiveStoreError("ledger limit must be a positive integer")
         return copy.deepcopy(self._validated_ledger_payloads()[-limit:])
 
     def iter_anchor_keys(self, kind: str | None = None) -> list[str]:
-        """Return validated anchor keys, optionally filtered by anchor kind."""
+        """Return canonical keys for persisted anchors in storage order.
+
+        Args:
+            kind: Optional exact anchor-kind value used to filter keys.
+
+        Returns:
+            A newly allocated list of canonical anchor strings. Mutating the list
+            does not change scene state.
+
+        Raises:
+            InvalidAnchorRef: If a persisted anchor key cannot be parsed.
+            PrimitiveStoreError: If the persisted primitive root is invalid.
+        """
         self.ensure_shape()
         keys = []
         for key in self.root["anchors"]:
@@ -396,7 +453,21 @@ class PrimitiveStore:
         return keys
 
     def iter_primitives(self, anchor: AnchorRef | str, kind: str) -> dict[str, Any]:
-        """Return primitive payloads of a given kind under an anchor."""
+        """Return one primitive collection stored under an anchor.
+
+        Args:
+            anchor: Anchor reference object or canonical anchor string.
+            kind: Exact primitive collection name to retrieve.
+
+        Returns:
+            A deep copy of the mapping from primitive ids to payloads. Missing
+            anchors or collection names return an empty dictionary; mutating any
+            returned container does not change scene state.
+
+        Raises:
+            InvalidAnchorRef: If ``anchor`` is a string that cannot be parsed.
+            PrimitiveStoreError: If the persisted root or anchor payload is invalid.
+        """
         anchor_payload = self.get_anchor(anchor)
         if anchor_payload is None:
             return {}
@@ -477,19 +548,7 @@ class PrimitiveStore:
     ) -> dict[str, Any]:
         """Validate a definition payload with kind-specific schemas when known."""
         try:
-            if kind == "roll_tables":
-                from talemate.game.primitives.roll_tables import RollTableDefinition
-
-                return RollTableDefinition.model_validate(value).model_dump(mode="json")
-            if kind == "modifiers":
-                from talemate.game.primitives.modifiers import RollModifier
-
-                return RollModifier.model_validate(value).model_dump(mode="json")
-            if kind == "decks":
-                from talemate.game.primitives.decks import DeckDefinition
-
-                return DeckDefinition.model_validate(value).model_dump(mode="json")
-            return self._coerce_primitive_payload(value)
+            return coerce_definition_payload(kind, definition_id, value)
         except (pydantic.ValidationError, ValueError) as exc:
             raise PrimitiveStoreError(
                 f"Invalid primitive definition {kind}/{definition_id}: {exc}"

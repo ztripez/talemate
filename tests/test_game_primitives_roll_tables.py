@@ -69,6 +69,21 @@ def test_roll_table_definition_rejects_overlapping_ranges():
         )
 
 
+def test_roll_table_definition_rejects_duplicate_row_ids():
+    with pytest.raises(ValueError, match="row ids must be unique"):
+        RollTableDefinition.model_validate(
+            {
+                "id": "duplicate",
+                "name": "Duplicate",
+                "mode": "weighted",
+                "rows": [
+                    {"id": "same", "label": "First", "weight": 1},
+                    {"id": "same", "label": "Second", "weight": 1},
+                ],
+            }
+        )
+
+
 def test_dice_roll_applies_active_modifiers_and_records_ledger():
     """Dice tables include raw rolls, modifiers, final total, result, and ledger."""
     scene = Scene()
@@ -187,6 +202,75 @@ def test_weighted_roll_excludes_condition_failed_rows():
     assert result.result_id == "open"
     assert result.debug["total_weight"] == 1.0
     assert result.debug["inactive_rows"] == ["blocked"]
+
+
+def test_roll_resolves_canonical_anchored_instance_payload():
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_definition(
+        "roll_tables",
+        "weather",
+        {
+            "id": "weather",
+            "name": "Weather",
+            "mode": "weighted",
+            "rows": [{"id": "sun", "label": "Sunny", "weight": 1}],
+        },
+    )
+    store.set_runtime_primitive(
+        "scene:main/roll_tables/local-weather", {"definition": "weather"}
+    )
+
+    result = RollTableEngine(FixedRng(randoms=[0.0])).roll(
+        scene, "scene:main/roll_tables/local-weather"
+    )
+
+    assert result.result_id == "sun"
+    assert result.source_id == "scene:main/roll_tables/local-weather"
+
+
+def test_roll_resolves_strict_legacy_value_payload():
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_runtime_primitive(
+        "scene:main/roll_tables/weather",
+        {
+            "value": {
+                "id": "weather",
+                "name": "Weather",
+                "mode": "weighted",
+                "rows": [{"id": "sun", "label": "Sunny", "weight": 1}],
+            }
+        },
+    )
+
+    result = RollTableEngine(FixedRng(randoms=[0.0])).roll(
+        scene, "scene:main/roll_tables/weather"
+    )
+
+    assert result.result_id == "sun"
+
+
+def test_roll_rejects_unknown_legacy_value_payload_fields():
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_runtime_primitive(
+        "scene:main/roll_tables/weather",
+        {
+            "value": {
+                "id": "weather",
+                "name": "Weather",
+                "mode": "weighted",
+                "rows": [{"id": "sun", "label": "Sunny", "weight": 1}],
+            },
+            "unknown": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        RollTableEngine(FixedRng(randoms=[0.0])).roll(
+            scene, "scene:main/roll_tables/weather"
+        )
 
 
 def test_no_matching_dice_row_returns_clear_debug_error():

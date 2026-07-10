@@ -49,6 +49,7 @@ class DebugPing(Node):
 
 # Import primitive node modules after DebugPing so their registration decorators run.
 import talemate.game.engine.nodes.primitives.attributes  # noqa: E402,F401 - node registration side effect
+import talemate.game.engine.nodes.primitives.authoring  # noqa: E402,F401 - node registration side effect
 import talemate.game.engine.nodes.primitives.conditions  # noqa: E402,F401 - node registration side effect
 import talemate.game.engine.nodes.primitives.decks  # noqa: E402,F401 - node registration side effect
 import talemate.game.engine.nodes.primitives.effects  # noqa: E402,F401 - node registration side effect

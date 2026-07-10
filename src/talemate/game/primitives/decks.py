@@ -25,7 +25,6 @@ from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.selection import SelectionResult
 from talemate.game.primitives.store import PrimitiveStore
-from talemate.game.primitives.values import primitive_payload_value
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
@@ -280,6 +279,45 @@ class DeckInstancePayload(pydantic.BaseModel):
 
     definition: str | DeckDefinition
     runtime: DeckRuntimeState
+
+    @classmethod
+    def create(
+        cls, definition: DeckDefinition, ref: PrimitiveRef | str
+    ) -> "DeckInstancePayload":
+        """Create canonical initial state for an anchored deck instance.
+
+        Args:
+            definition: Deck definition used to initialize the instance.
+            ref: Primitive reference whose canonical key seeds the runtime state.
+
+        Returns:
+            A canonical instance payload referencing the supplied definition.
+
+        Raises:
+            pydantic.ValidationError: If ``ref`` is not a valid primitive reference.
+        """
+        instance_ref = PrimitiveRef.model_validate(ref)
+        return cls(
+            definition=definition.id,
+            runtime=_initial_state(definition, instance_ref.key()),
+        )
+
+
+class LegacyDeckValuePayload(pydantic.BaseModel):
+    """Validated legacy wrapper containing an inline deck definition.
+
+    Attributes:
+        value: Inline deck definition stored by legacy primitive payloads.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    value: DeckDefinition
+
+
+_DECK_INSTANCE_ADAPTER = pydantic.TypeAdapter(
+    DeckInstancePayload | DeckDefinition | LegacyDeckValuePayload
+)
 
 
 class DeckPeekResult(pydantic.BaseModel):
@@ -629,12 +667,11 @@ def _runtime_from_payload(
 
 
 def _definition_from_instance(store: PrimitiveStore, payload: dict) -> DeckDefinition:
-    if not isinstance(payload, dict):
-        candidate = primitive_payload_value(payload)
-        return DeckDefinition.model_validate(candidate)
-    if "runtime" not in payload:
-        return DeckDefinition.model_validate(primitive_payload_value(payload))
-    instance = DeckInstancePayload.model_validate(payload)
+    instance = _DECK_INSTANCE_ADAPTER.validate_python(payload)
+    if isinstance(instance, DeckDefinition):
+        return instance
+    if isinstance(instance, LegacyDeckValuePayload):
+        return instance.value
     definition_ref = instance.definition
     if isinstance(definition_ref, DeckDefinition):
         return definition_ref

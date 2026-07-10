@@ -37,6 +37,19 @@ class RollTableRow(pydantic.BaseModel):
     Rows map either an inclusive dice total range or a weighted selection value
     to narrative output, variables, and optional primitive effects. Condition
     groups are evaluated before selection; failed rows are excluded.
+
+    Attributes:
+        id: Non-empty identifier unique within the containing table.
+        label: Non-empty human-readable result label.
+        text: Optional narrative text returned when the row is selected.
+        range: Inclusive integer or ``"start-end"`` interval required in dice
+            mode.
+        weight: Positive finite numeric selection weight required in weighted
+            mode.
+        tags: Metadata tags associated with the result.
+        variables: JSON-compatible values returned with the selection.
+        effects: Primitive mutations returned for optional application.
+        conditions: Condition groups that must match for the row to participate.
     """
 
     model_config = pydantic.ConfigDict(
@@ -55,7 +68,17 @@ class RollTableRow(pydantic.BaseModel):
 
 
 class RollTableDefinition(pydantic.BaseModel):
-    """Validated roll table definition for dice-total or weighted selection."""
+    """Validated roll table definition for dice-total or weighted selection.
+
+    Attributes:
+        id: Non-empty canonical identifier for the table.
+        name: Non-empty human-readable table name.
+        mode: Selection mode, either dice-total ranges or weighted rows.
+        dice: Dice expression required by dice-mode tables.
+        rows: Non-empty rows with unique identifiers and mode-specific fields.
+        modifiers: Roll modifier identifiers applied when resolving the table.
+
+    """
 
     model_config = pydantic.ConfigDict(
         extra="forbid", allow_inf_nan=False, str_strip_whitespace=True
@@ -70,9 +93,22 @@ class RollTableDefinition(pydantic.BaseModel):
 
     @pydantic.model_validator(mode="after")
     def validate_table_shape(self) -> "RollTableDefinition":
-        """Validate mode-specific roll table requirements after model creation."""
+        """Validate row identity and mode-specific table requirements.
+
+        Returns:
+            The validated roll table definition.
+
+        Raises:
+            ValueError: If rows are empty or duplicate identifiers, a dice table
+                has no valid dice expression or has invalid ranges, or a weighted
+                table has invalid row weights.
+
+        """
         if not self.rows:
             raise ValueError("Roll table requires at least one row")
+        row_ids = [row.id for row in self.rows]
+        if len(row_ids) != len(set(row_ids)):
+            raise ValueError("Roll table row ids must be unique")
         if self.mode == "dice":
             if not self.dice:
                 raise ValueError("Dice roll tables require dice")
@@ -83,11 +119,47 @@ class RollTableDefinition(pydantic.BaseModel):
         return self
 
 
+class RollTableInstancePayload(pydantic.BaseModel):
+    """Validated persisted payload for one anchored roll-table instance.
+
+    Attributes:
+        definition: Stored definition id or inline roll-table definition payload.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    definition: str | RollTableDefinition
+
+
+class LegacyRollTableValuePayload(pydantic.BaseModel):
+    """Validated legacy wrapper containing an inline roll-table definition.
+
+    Attributes:
+        value: Inline roll-table definition stored by legacy primitive payloads.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    value: RollTableDefinition
+
+
+_ROLL_TABLE_INSTANCE_ADAPTER = pydantic.TypeAdapter(
+    RollTableInstancePayload | RollTableDefinition | LegacyRollTableValuePayload
+)
+
+
 class RollTableRollRequest(pydantic.BaseModel):
     """Validated graph/runtime request for executing one roll table roll.
 
     The ``context`` field is trace metadata copied into debug and ledger output;
     it does not influence row selection, conditions, modifiers, or effects.
+
+    Attributes:
+        table: Inline table model, inline JSON-compatible table payload, reusable
+            definition id, or canonical anchored primitive reference.
+        anchor: Optional canonical anchor used to resolve a local table id.
+        context: JSON-compatible trace metadata copied into result diagnostics.
+        apply_effects: Whether to apply effects from the selected row.
     """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -99,7 +171,13 @@ class RollTableRollRequest(pydantic.BaseModel):
 
 
 class RollTablePreviewRequest(pydantic.BaseModel):
-    """Validated graph/runtime request for previewing roll table odds."""
+    """Validated graph/runtime request for previewing roll table odds.
+
+    Attributes:
+        table: Inline table model, inline JSON-compatible table payload, reusable
+            definition id, or canonical anchored primitive reference.
+        anchor: Optional canonical anchor used to resolve a local table id.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -108,19 +186,44 @@ class RollTablePreviewRequest(pydantic.BaseModel):
 
 
 class RollModifierDebugEntry(pydantic.BaseModel):
-    """Debug trace row for one active or inactive roll modifier."""
+    """Describe one roll modifier considered while resolving a dice table.
+
+    Attributes:
+        id: Identifier of the considered modifier definition.
+        label: Optional display label copied from the modifier definition.
+        explanation: Optional human-readable reason for the modifier, copied from
+            the modifier definition for presentation in diagnostic output.
+        value: Numeric amount added to the raw roll total. Resolution records the
+            modifier's configured amount when active and zero when inactive.
+        active: Whether the modifier targeted the resolved table and all of its
+            activation conditions matched.
+        reason: Machine-readable activation summary. Roll-table resolution emits
+            ``active`` or ``inactive``.
+
+    Invariants:
+        Unknown fields and non-finite numeric values are rejected. Numeric values
+        must be strict integers or floating-point values rather than coerced text.
+
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
     id: str
     label: str | None = None
+    explanation: str | None = None
     value: pydantic.StrictInt | pydantic.StrictFloat
     active: bool
     reason: str
 
 
 class RollTableLedgerInput(pydantic.BaseModel):
-    """Validated roll-table ledger input payload."""
+    """Validated roll-table ledger input payload.
+
+    Attributes:
+        table: Resolved definition id or anchored primitive reference.
+        dice: Dice expression used by a dice table, or ``None`` for weighted mode.
+        context: JSON-compatible trace metadata supplied by the caller.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -130,7 +233,15 @@ class RollTableLedgerInput(pydantic.BaseModel):
 
 
 class RollTableLedgerOutput(pydantic.BaseModel):
-    """Validated roll-table ledger output payload."""
+    """Validated roll-table ledger output payload.
+
+    Attributes:
+        raw: Unmodified dice total, or ``None`` for weighted mode.
+        rolls: Individual die results, empty for weighted mode.
+        modifiers: Modifiers considered during dice-table resolution.
+        final: Dice total after active modifiers, or ``None`` for weighted mode.
+        result_id: Identifier of the selected row, if selection succeeded.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -142,7 +253,20 @@ class RollTableLedgerOutput(pydantic.BaseModel):
 
 
 class RollTableDiceDebug(pydantic.BaseModel):
-    """Validated debug trace for a dice roll table resolution."""
+    """Validated debug trace for a dice roll table resolution.
+
+    Attributes:
+        mode: Discriminator fixed to ``"dice"``.
+        dice: Dice expression resolved by the engine.
+        rolls: Individual die results in roll order.
+        raw: Sum of the individual die results before modifiers.
+        modifiers: Modifiers considered during resolution.
+        final: Raw total plus all active modifier values.
+        gaps: Inclusive reachable intervals not covered by any table row.
+        inactive_rows: Row identifiers excluded by failed conditions.
+        context: JSON-compatible trace metadata supplied by the caller.
+        applied_effects: Effect-batch result when row effects were requested.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -159,7 +283,16 @@ class RollTableDiceDebug(pydantic.BaseModel):
 
 
 class RollTableWeightedDebug(pydantic.BaseModel):
-    """Validated debug trace for a weighted roll table resolution."""
+    """Validated debug trace for a weighted roll table resolution.
+
+    Attributes:
+        mode: Discriminator fixed to ``"weighted"``.
+        total_weight: Sum of weights for rows whose conditions matched.
+        threshold: Random selection threshold in ``[0, total_weight)``.
+        inactive_rows: Row identifiers excluded by failed conditions.
+        context: JSON-compatible trace metadata supplied by the caller.
+        applied_effects: Effect-batch result when row effects were requested.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -172,7 +305,16 @@ class RollTableWeightedDebug(pydantic.BaseModel):
 
 
 class OddsPreviewRow(pydantic.BaseModel):
-    """Validated probability row for odds preview output."""
+    """Validated probability row for odds preview output.
+
+    Attributes:
+        id: Identifier of an active table row.
+        label: Human-readable label of the active table row.
+        probability: Selection probability from zero through one.
+        weight: Configured row weight for weighted mode.
+        range: Configured inclusive row interval for dice mode.
+        outcomes: Number of equally likely dice combinations selecting the row.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -185,7 +327,18 @@ class OddsPreviewRow(pydantic.BaseModel):
 
 
 class OddsPreview(pydantic.BaseModel):
-    """Validated odds preview output for dice and weighted roll tables."""
+    """Validated odds preview output for dice and weighted roll tables.
+
+    Attributes:
+        source_type: Source discriminator fixed to ``"roll_table"``.
+        source_id: Resolved definition id or anchored primitive reference.
+        mode: Table selection mode represented by the preview.
+        dice: Dice expression for dice mode.
+        total_weight: Sum of active row weights for weighted mode.
+        gaps: Inclusive reachable dice intervals not covered by table rows.
+        rows: Probability details for rows whose conditions matched.
+        inactive_rows: Row identifiers excluded by failed conditions.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -200,7 +353,13 @@ class OddsPreview(pydantic.BaseModel):
 
 
 class WeightedPool(pydantic.BaseModel):
-    """Internal weighted-row pool shared by rolling and odds preview."""
+    """Collect condition-filtered rows used by weighted table operations.
+
+    Attributes:
+        inactive_rows: Rows excluded because their condition groups did not match.
+        weighted_rows: Active rows with positive configured weights.
+        total_weight: Sum of ``weighted_rows`` weights as a floating-point value.
+    """
 
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
 
@@ -210,7 +369,19 @@ class WeightedPool(pydantic.BaseModel):
 
 
 def parse_dice(expression: str) -> tuple[int, int]:
-    """Parse an ``NdM`` dice expression into dice count and side count."""
+    """Parse a positive ``NdM`` dice expression.
+
+    Args:
+        expression: Case-sensitive expression containing positive decimal dice
+            and side counts; surrounding whitespace is ignored.
+
+    Returns:
+        A ``(dice_count, side_count)`` tuple of positive integers.
+
+    Raises:
+        ValueError: If ``expression`` is not a string or does not contain exactly
+            the supported ``NdM`` syntax.
+    """
     if not isinstance(expression, str):
         raise ValueError("Dice expression must be a string")
     match = _DICE_RE.match(expression.strip())
@@ -220,7 +391,19 @@ def parse_dice(expression: str) -> tuple[int, int]:
 
 
 def parse_range(value: str | int) -> tuple[int, int]:
-    """Parse an inclusive roll table range from an integer or ``a-b`` string."""
+    """Parse an inclusive integer roll-table interval.
+
+    Args:
+        value: Non-boolean integer, integer string, or ``"start-end"`` string;
+            strings may contain surrounding whitespace and negative bounds.
+
+    Returns:
+        An inclusive ``(start, end)`` tuple. A single value produces equal bounds.
+
+    Raises:
+        ValueError: If ``value`` has an unsupported type or syntax, is boolean, or
+            has a start greater than its end.
+    """
     if isinstance(value, bool):
         raise ValueError("Range cannot be boolean")
     if isinstance(value, int):
@@ -242,10 +425,19 @@ def parse_range(value: str | int) -> tuple[int, int]:
 
 
 class RollTableEngine:
-    """Resolve roll table selections against a Talemate scene."""
+    """Resolve roll-table selections and odds against a Talemate scene.
+
+    Attributes:
+        rng: Random source used for die rolls and weighted thresholds.
+    """
 
     def __init__(self, rng: random.Random | None = None):
-        """Create a roll table engine with an optional random number source."""
+        """Create a roll-table engine.
+
+        Args:
+            rng: Random source implementing ``randint`` and ``random``. A new
+                independent ``random.Random`` instance is created when omitted.
+        """
         self.rng = rng if rng is not None else random.Random()
 
     def roll(
@@ -261,6 +453,30 @@ class RollTableEngine:
 
         ``context`` is trace metadata copied into debug and ledger output; it
         does not influence row selection, conditions, modifiers, or effects.
+
+        Args:
+            scene: Scene providing primitive definitions, state, and conditions.
+            table: Inline definition model or dictionary, reusable definition id,
+                local id resolved under ``anchor``, or anchored primitive reference.
+            anchor: Optional anchor associated with inline definitions or used to
+                resolve an unqualified local table id.
+            context: Optional JSON-compatible trace metadata.
+            apply_effects: Whether to apply effects from the selected row.
+
+        Returns:
+            A selection result containing deep-copied row output and mode-specific
+            diagnostics.
+
+        Raises:
+            TypeError: If ``apply_effects`` is not a strict boolean.
+            pydantic.ValidationError: If inline table, context, anchor, stored
+                payload, or generated diagnostics violate their schemas.
+            PrimitiveError: If a reference cannot be resolved, random output is
+                invalid, no row can be selected, or requested effects fail.
+
+        Side Effects:
+            Initializes or normalizes the scene primitive store, appends one ledger
+            entry, advances the random source, and optionally applies row effects.
         """
         if type(apply_effects) is not bool:
             raise TypeError("apply_effects must be a boolean")
@@ -319,7 +535,28 @@ class RollTableEngine:
         *,
         anchor: AnchorRef | str | None = None,
     ) -> dict[str, pydantic.JsonValue]:
-        """Compute JSON-compatible odds without mutating primitive state."""
+        """Compute selection odds without rolling, recording, or applying effects.
+
+        Args:
+            scene: Scene providing primitive definitions, state, and conditions.
+            table: Inline definition model or dictionary, reusable definition id,
+                local id resolved under ``anchor``, or anchored primitive reference.
+            anchor: Optional anchor associated with inline definitions or used to
+                resolve an unqualified local table id.
+
+        Returns:
+            A newly allocated JSON-compatible odds payload containing active row
+            probabilities, inactive row ids, and mode-specific totals or gaps.
+
+        Raises:
+            pydantic.ValidationError: If inline table, anchor, stored payload, or
+                generated odds violate their schemas.
+            PrimitiveError: If a table or primitive reference cannot be resolved.
+
+        Side Effects:
+            Initializes or normalizes the scene primitive store. The method does
+            not append ledger entries, advance the random source, or apply effects.
+        """
         store = PrimitiveStore.for_scene(scene)
         definition, source_id, _ = self._resolve_table(store, table, anchor)
         if definition.mode == "weighted":
@@ -452,9 +689,7 @@ class RollTableEngine:
             )
             payload = store.get_primitive(anchored_ref)
             if payload is not None:
-                definition = RollTableDefinition.model_validate(
-                    primitive_payload_value(payload)
-                )
+                definition = _definition_from_instance(store, payload)
                 return definition, anchored_ref.key(), anchored_ref.anchor.key()
 
         if "/" in table_text:
@@ -462,9 +697,7 @@ class RollTableEngine:
             payload = store.get_primitive(ref)
             if payload is None:
                 raise PrimitiveError(f"Roll table primitive not found: {ref.key()}")
-            definition = RollTableDefinition.model_validate(
-                primitive_payload_value(payload)
-            )
+            definition = _definition_from_instance(store, payload)
             return definition, ref.key(), ref.anchor.key()
 
         payload = store.get_definition("roll_tables", table_text)
@@ -489,12 +722,30 @@ class RollTableEngine:
                 RollModifierDebugEntry(
                     id=modifier.id,
                     label=modifier.label,
+                    explanation=modifier.explanation,
                     value=modifier.add if active else 0,
                     active=active,
                     reason="active" if active else "inactive",
                 )
             )
         return debug
+
+
+def _definition_from_instance(
+    store: PrimitiveStore, payload: dict
+) -> RollTableDefinition:
+    """Resolve a direct table payload or canonical anchored instance payload."""
+    instance = _ROLL_TABLE_INSTANCE_ADAPTER.validate_python(payload)
+    if isinstance(instance, RollTableDefinition):
+        return instance
+    if isinstance(instance, LegacyRollTableValuePayload):
+        return instance.value
+    if isinstance(instance.definition, RollTableDefinition):
+        return instance.definition
+    definition = store.get_definition("roll_tables", instance.definition)
+    if definition is None:
+        raise PrimitiveError(f"Roll table definition not found: {instance.definition}")
+    return RollTableDefinition.model_validate(definition)
 
 
 def _validate_dice_rows(rows: list[RollTableRow]) -> None:

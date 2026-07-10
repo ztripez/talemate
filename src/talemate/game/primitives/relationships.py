@@ -12,11 +12,11 @@ from talemate.game.primitives.anchors import (
     relationship_anchor,
     relationship_participants,
 )
+from talemate.game.primitives.definitions import MeterPayload
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.render import RenderPolicy
 from talemate.game.primitives.store import PrimitiveStore
-from talemate.game.primitives.values import primitive_payload_value
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
@@ -24,40 +24,83 @@ if TYPE_CHECKING:
 _MISSING = object()
 
 
-class RelationshipDimension(pydantic.BaseModel):
-    """Mechanical state for one directional relationship dimension.
-
-    Attributes:
-        id: Dimension id, such as ``"trust"`` or ``"comfort"``.
-        value: Current finite numeric value.
-        min: Inclusive finite lower bound for valid values.
-        max: Inclusive finite upper bound for valid values.
-        label: Optional human-readable dimension label.
-        render_policy: Visibility policy for prompt-safe summaries.
-    """
+class _CanonicalRelationshipPayload(MeterPayload):
+    """Strict canonical persisted relationship dimension payload."""
 
     model_config = pydantic.ConfigDict(
-        extra="forbid", allow_inf_nan=False, str_strip_whitespace=True
+        extra="forbid",
+        allow_inf_nan=False,
+        str_strip_whitespace=True,
+        strict=True,
     )
 
-    id: str = pydantic.Field(min_length=1)
-    value: pydantic.StrictInt | pydantic.StrictFloat = 0
-    min: pydantic.StrictInt | pydantic.StrictFloat = -5
-    max: pydantic.StrictInt | pydantic.StrictFloat = 5
-    label: str | None = None
-    render_policy: RenderPolicy = "summary"
+    def to_meter_payload(
+        self, dimension: str, min_value: int | float, max_value: int | float
+    ) -> MeterPayload:
+        """Return this canonical payload as the public meter model."""
+        return MeterPayload.model_validate(self.model_dump())
 
-    @pydantic.model_validator(mode="after")
-    def validate_bounds(self) -> "RelationshipDimension":
-        """Validate finite bounds and value range."""
-        _require_finite("value", self.value)
-        _require_finite("min", self.min)
-        _require_finite("max", self.max)
-        if self.min > self.max:
-            raise ValueError("Relationship dimension min cannot exceed max")
-        if not self.min <= self.value <= self.max:
-            raise ValueError("Relationship dimension value is outside min/max bounds")
-        return self
+
+class _RelationshipValuePayload(pydantic.BaseModel):
+    """Legacy value-only relationship dimension payload."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+
+    value: pydantic.StrictInt | pydantic.StrictFloat
+
+    def to_meter_payload(
+        self, dimension: str, min_value: int | float, max_value: int | float
+    ) -> MeterPayload:
+        """Convert a legacy value object to a canonical relationship meter."""
+        return relationship_meter(
+            id=dimension, value=self.value, min=min_value, max=max_value
+        )
+
+
+class _RelationshipScalarPayload(
+    pydantic.RootModel[pydantic.StrictInt | pydantic.StrictFloat]
+):
+    """Legacy scalar relationship dimension payload."""
+
+    model_config = pydantic.ConfigDict(allow_inf_nan=False, strict=True)
+
+    def to_meter_payload(
+        self, dimension: str, min_value: int | float, max_value: int | float
+    ) -> MeterPayload:
+        """Wrap a legacy scalar in a canonical relationship meter."""
+        return relationship_meter(
+            id=dimension, value=self.root, min=min_value, max=max_value
+        )
+
+
+_RELATIONSHIP_PAYLOAD_ADAPTER = pydantic.TypeAdapter(
+    _CanonicalRelationshipPayload
+    | _RelationshipValuePayload
+    | _RelationshipScalarPayload
+)
+
+
+def relationship_meter(**payload: object) -> MeterPayload:
+    """Build a canonical meter with relationship-specific defaults.
+
+    Args:
+        **payload: Meter fields. Missing ``value``, ``min``, ``max``, and
+            ``render_policy`` fields default to ``0``, ``-5``, ``5``, and
+            ``"summary"``, respectively.
+
+    Returns:
+        A validated canonical meter payload.
+
+    Raises:
+        pydantic.ValidationError: If the payload contains unknown fields or
+            violates the canonical meter schema.
+
+    """
+    payload.setdefault("value", 0)
+    payload.setdefault("min", -5)
+    payload.setdefault("max", 5)
+    payload.setdefault("render_policy", "summary")
+    return MeterPayload.model_validate(payload)
 
 
 class RelationshipSetRequest(pydantic.BaseModel):
@@ -91,7 +134,7 @@ class RelationshipSetRequest(pydantic.BaseModel):
     def validate_request(self) -> "RelationshipSetRequest":
         """Validate numeric bounds and relationship anchor syntax."""
         relationship_anchor(self.source, self.target)
-        RelationshipDimension(
+        relationship_meter(
             id=self.dimension,
             value=self.value,
             min=self.min,
@@ -149,24 +192,6 @@ class RelationshipLedgerOutput(pydantic.BaseModel):
 
     previous: pydantic.StrictInt | pydantic.StrictFloat | None = None
     current: pydantic.StrictInt | pydantic.StrictFloat
-
-
-class RelationshipValuePayload(pydantic.BaseModel):
-    """Value-only relationship dimension payload accepted from generic effects.
-
-    Attributes:
-        value: Finite numeric relationship dimension value.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    value: pydantic.StrictInt | pydantic.StrictFloat
-
-    @pydantic.model_validator(mode="after")
-    def validate_value(self) -> "RelationshipValuePayload":
-        """Validate that the value is finite."""
-        _require_finite("value", self.value)
-        return self
 
 
 class RelationshipSetNodeOutput(pydantic.BaseModel):
@@ -303,7 +328,7 @@ class RelationshipGraph:
         max: int | float = 5,
         label: str | None = None,
         render_policy: RenderPolicy = "summary",
-    ) -> RelationshipDimension:
+    ) -> MeterPayload:
         """Store one bounded dimension value and record a ledger entry.
 
         Args:
@@ -346,7 +371,7 @@ class RelationshipGraph:
             request.dimension, previous_payload, request.min, request.max
         )
         previous = previous_dimension.value if previous_dimension else None
-        model = RelationshipDimension(
+        model = relationship_meter(
             id=request.dimension,
             value=request.value,
             min=request.min,
@@ -377,7 +402,7 @@ class RelationshipGraph:
         *,
         min: int | float = -5,
         max: int | float = 5,
-    ) -> tuple[RelationshipDimension, int | float | None]:
+    ) -> tuple[MeterPayload, int | float | None]:
         """Add a numeric delta to one relationship dimension.
 
         Args:
@@ -423,7 +448,7 @@ class RelationshipGraph:
             previous_dimension.render_policy if previous_dimension else "summary"
         )
         label = previous_dimension.label if previous_dimension else None
-        model = RelationshipDimension(
+        model = relationship_meter(
             id=request.dimension,
             value=current,
             min=previous_dimension.min if previous_dimension else request.min,
@@ -506,7 +531,7 @@ class RelationshipGraph:
 
     def _dimensions(
         self, scene: "Scene", source: str, target: str
-    ) -> list[RelationshipDimension]:
+    ) -> list[MeterPayload]:
         store = PrimitiveStore.for_scene(scene)
         anchor = relationship_anchor(source, target)
         return [
@@ -523,28 +548,16 @@ def _dimension_ref(source: str, target: str, dimension: str) -> PrimitiveRef:
 
 
 def _dimension_from_payload(
-    dimension: str, payload: dict | None, min_value: int | float, max_value: int | float
-) -> RelationshipDimension | None:
+    dimension: str,
+    payload: object | None,
+    min_value: int | float,
+    max_value: int | float,
+) -> MeterPayload | None:
     """Return a validated dimension model from a primitive payload."""
     if payload is None:
         return None
-    if isinstance(payload, dict) and "id" in payload:
-        return RelationshipDimension.model_validate(payload)
-    if isinstance(payload, dict):
-        legacy = RelationshipValuePayload.model_validate(payload)
-        return RelationshipDimension(
-            id=dimension,
-            value=legacy.value,
-            min=min_value,
-            max=max_value,
-        )
-    return RelationshipDimension(
-        id=dimension,
-        value=pydantic.TypeAdapter(
-            pydantic.StrictInt | pydantic.StrictFloat
-        ).validate_python(primitive_payload_value(payload)),
-        min=min_value,
-        max=max_value,
+    return _RELATIONSHIP_PAYLOAD_ADAPTER.validate_python(payload).to_meter_payload(
+        dimension, min_value, max_value
     )
 
 
@@ -571,7 +584,7 @@ def relationship_value_payload(
             "relationship_value_payload requires relationship meter ref"
         )
     previous = _dimension_from_payload(ref.id, previous_payload, -5, 5)
-    model = RelationshipDimension(
+    model = relationship_meter(
         id=ref.id,
         value=value,
         min=previous.min if previous else -5,
@@ -590,7 +603,7 @@ def _require_finite(name: str, value: int | float) -> None:
         raise ValueError(f"{name} must be finite")
 
 
-def _default_summary(source: str, target: str, dimension: RelationshipDimension) -> str:
+def _default_summary(source: str, target: str, dimension: MeterPayload) -> str:
     """Return generic prompt-safe prose for common relationship dimensions."""
     label = dimension.label or dimension.id.replace("_", " ")
     value = dimension.value

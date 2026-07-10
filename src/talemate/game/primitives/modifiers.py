@@ -13,6 +13,7 @@ class RollModifier(pydantic.BaseModel):
     Attributes:
         id: Stable modifier identifier.
         label: Optional display label for debug traces.
+        explanation: Optional human-readable reason for the modifier.
         applies_to: Roll table definition id or primitive reference this modifier
             targets.
         when: Primitive-aware condition groups that must match for activation.
@@ -25,6 +26,7 @@ class RollModifier(pydantic.BaseModel):
 
     id: str = pydantic.Field(min_length=1)
     label: str | None = None
+    explanation: str | None = None
     applies_to: str = pydantic.Field(min_length=1)
     when: list[PrimitiveConditionGroup] = pydantic.Field(default_factory=list)
     add: pydantic.StrictInt | pydantic.StrictFloat = 0

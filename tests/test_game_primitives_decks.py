@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 
+import pydantic
 import pytest
 from _node_test_helpers import run_node
 
 import talemate.game.engine.nodes.load_definitions  # noqa: F401
 from talemate.context import ActiveScene
 from talemate.game.engine.nodes.registry import get_node
-from talemate.game.primitives.decks import DeckEngine
+from talemate.game.primitives.decks import DeckEngine, _definition_from_instance
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
@@ -309,6 +310,62 @@ def test_persisted_runtime_state_continues_across_engine_instances():
     assert [first.result_id, second.result_id] == ["a", "b"]
     assert len(ledger) == 2
     assert ledger[-1]["output"]["card_id"] == "b"
+
+
+def test_instance_definition_ingestion_supports_all_persisted_payload_schemas():
+    """Canonical, direct, and legacy payloads resolve through one schema boundary."""
+    store = PrimitiveStore.for_scene(Scene())
+    definition = {
+        "id": "weather",
+        "name": "Weather",
+        "mode": "bag",
+        "cards": [{"id": "sun", "label": "Sunny"}],
+    }
+    store.set_definition("decks", "weather", definition)
+    runtime = {"definition_id": "weather", "mode": "bag"}
+
+    resolved = [
+        _definition_from_instance(store, {"definition": "weather", "runtime": runtime}),
+        _definition_from_instance(store, definition),
+        _definition_from_instance(store, {"value": definition}),
+    ]
+
+    assert [deck.id for deck in resolved] == ["weather", "weather", "weather"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "definition": "weather",
+            "runtime": {"definition_id": "weather", "mode": "bag"},
+            "unknown": True,
+        },
+        {
+            "id": "weather",
+            "name": "Weather",
+            "mode": "bag",
+            "cards": [{"id": "sun", "label": "Sunny"}],
+            "unknown": True,
+        },
+        {
+            "value": {
+                "id": "weather",
+                "name": "Weather",
+                "mode": "bag",
+                "cards": [{"id": "sun", "label": "Sunny"}],
+            },
+            "unknown": True,
+        },
+    ],
+    ids=["instance", "definition", "legacy-value"],
+)
+def test_instance_definition_ingestion_rejects_unknown_fields(payload):
+    """Every supported persisted payload shape rejects unknown top-level fields."""
+    store = PrimitiveStore.for_scene(Scene())
+
+    with pytest.raises(pydantic.ValidationError, match="extra_forbidden"):
+        _definition_from_instance(store, payload)
 
 
 async def test_deck_draw_node_returns_json_serializable_output():

@@ -9,8 +9,12 @@ import talemate.game.engine.nodes.load_definitions  # noqa: F401
 from talemate.context import ActiveScene
 from talemate.game.engine.nodes.registry import get_node
 from talemate.game.primitives.conditions import evaluate_condition_input
+from talemate.game.primitives.definitions import MeterPayload
 from talemate.game.primitives.effects import apply_effects
-from talemate.game.primitives.relationships import RelationshipGraph
+from talemate.game.primitives.relationships import (
+    RelationshipGraph,
+    _dimension_from_payload,
+)
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
@@ -38,14 +42,16 @@ def test_relationship_set_adjust_bounds_and_records_ledger():
     scene = Scene()
     graph = RelationshipGraph()
 
-    graph.set(scene, "Model", "Photographer", "trust", 4, min=-5, max=5)
+    set_meter = graph.set(scene, "Model", "Photographer", "trust", 4, min=-5, max=5)
     current, previous = graph.adjust(scene, "Model", "Photographer", "trust", 1)
     entries = PrimitiveStore.for_scene(scene).recent_ledger(2)
 
+    assert isinstance(set_meter, MeterPayload)
+    assert isinstance(current, MeterPayload)
     assert previous == 4
     assert current.value == 5
     assert graph.get(scene, "Model", "Photographer", "trust") == 5
-    with pytest.raises(ValueError, match="outside min/max"):
+    with pytest.raises(ValueError, match="within min and max"):
         graph.adjust(scene, "Model", "Photographer", "trust", 1)
     assert graph.get(scene, "Model", "Photographer", "trust") == 5
     assert [entry["op"] for entry in entries] == [
@@ -58,6 +64,57 @@ def test_relationship_set_adjust_bounds_and_records_ledger():
     assert entries[-1]["anchor"] == "relationship:Model->Photographer"
     assert entries[-1]["input"]["by"] == 1
     assert entries[-1]["output"] == {"previous": 4, "current": 5}
+
+
+def test_relationship_reads_canonical_and_legacy_value_payloads():
+    """Relationship dimensions accept canonical and wrapped legacy values."""
+    scene = Scene()
+    graph = RelationshipGraph()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_primitive("relationship:Model->Photographer/meters/trust", {"value": 2})
+    store.set_primitive(
+        "relationship:Model->Photographer/meters/comfort",
+        {
+            "id": "comfort",
+            "value": 3,
+            "min": -5,
+            "max": 5,
+            "render_policy": "summary",
+        },
+    )
+
+    assert graph.get(scene, "Model", "Photographer", "trust") == 2
+    assert graph.get(scene, "Model", "Photographer", "comfort") == 3
+
+    store.set_primitive(
+        "relationship:Model->Photographer/meters/respect", {"id": "respect"}
+    )
+    with pytest.raises(ValueError, match="Field required"):
+        graph.get(scene, "Model", "Photographer", "respect")
+
+    store.set_primitive(
+        "relationship:Model->Photographer/meters/trust",
+        {"value": 2, "unexpected": True},
+    )
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        graph.get(scene, "Model", "Photographer", "trust")
+
+
+def test_relationship_reads_strict_legacy_scalar_payload():
+    """Legacy scalars use the same strict persisted-payload adapter."""
+    dimension = _dimension_from_payload("trust", 2, -5, 5)
+
+    assert dimension is not None
+    assert dimension.model_dump(mode="json") == {
+        "id": "trust",
+        "label": None,
+        "min": -5,
+        "max": 5,
+        "value": 2,
+        "render_policy": "summary",
+    }
+    with pytest.raises(ValueError, match="valid integer|valid number"):
+        _dimension_from_payload("trust", "2", -5, 5)
 
 
 def test_relationship_summary_omits_hidden_dimensions_and_raw_numbers():
