@@ -1,0 +1,82 @@
+{#-
+Extractors:
+  - response: AnchorExtractor with parse_data for YAML/JSON object
+-#}
+{{ set_anchor_extractor("response", "<PRIMITIVE_PLAN>", "</PRIMITIVE_PLAN>", parse_data=True) }}
+
+<|SECTION:CONTEXT|>
+You are planning optional Game Primitives for a new interactive scenario.
+
+Scenario:
+{{ scenario }}
+
+{% if characters %}
+Characters: {{ characters | join(", ") }}
+{% endif %}
+<|CLOSE_SECTION|>
+
+<|SECTION:TASK|>
+Decide whether deterministic systems would meaningfully support this scenario. The plan is advisory only: it describes what a later authoring pass may create and must not be treated as validated or committed primitive data.
+
+Return one {{ data_format_type() }} object with exactly these required fields:
+- `needed`: boolean; whether any Game Primitives should be authored
+- `rationale`: non-empty concise explanation of why primitives are or are not useful
+- `anchors`: unique canonical anchor objects with exactly `kind` and `id`
+- `systems`: unique-ID objects with exactly `kind`, `id`, `anchor`, `purpose`, `visibility`, and `depends_on`
+- `prompt_visible`: unique non-empty descriptions intended for prompt context
+- `hidden`: unique non-empty descriptions of mechanics hidden from prompt context
+- `warnings`: unique non-empty planning risks, ambiguities, or constraints
+
+System `kind` is one of `meter`, `clock`, `deck`, `roll_table`, `relationship`, `modifier`, or `attribute_source`. `anchor` is a canonical anchor object or null, `purpose` is non-empty text, `visibility` is `prompt_visible` or `hidden`, and `depends_on` is a list of unique non-empty system IDs.
+
+Every field above must be present. When `needed` is true, include at least one anchor or system. For an explicit no-op, set `needed` to false and provide all five list fields as empty lists. Do not add fields or author primitive definitions in this pass.
+
+{% if data_format_type() == "json" %}
+```json
+<PRIMITIVE_PLAN>
+{
+  "needed": true,
+  "rationale": "Changing interpersonal pressure benefits from a persistent meter.",
+  "anchors": [{"kind": "relationship", "id": "Model->Photographer"}],
+  "systems": [{
+    "kind": "meter",
+    "id": "trust",
+    "anchor": {"kind": "relationship", "id": "Model->Photographer"},
+    "purpose": "Track how readily the model follows direction.",
+    "visibility": "prompt_visible",
+    "depends_on": []
+  }],
+  "prompt_visible": ["Describe changes in trust as natural interpersonal cues."],
+  "hidden": ["Keep the raw trust value hidden."],
+  "warnings": []
+}
+</PRIMITIVE_PLAN>
+```
+{% else %}
+```yaml
+<PRIMITIVE_PLAN>
+needed: true
+rationale: Changing interpersonal pressure benefits from a persistent meter.
+anchors:
+  - kind: relationship
+    id: Model->Photographer
+systems:
+  - kind: meter
+    id: trust
+    anchor:
+      kind: relationship
+      id: Model->Photographer
+    purpose: Track how readily the model follows direction.
+    visibility: prompt_visible
+    depends_on: []
+prompt_visible:
+  - Describe changes in trust as natural interpersonal cues.
+hidden:
+  - Keep the raw trust value hidden.
+warnings: []
+</PRIMITIVE_PLAN>
+```
+{% endif %}
+<|CLOSE_SECTION|>
+
+{{ set_prepared_response("<PRIMITIVE_PLAN>") }}

@@ -1,0 +1,48 @@
+<|SECTION:CONTEXT|>
+You are authoring a Game Primitives draft for a new interactive scenario.
+
+Scenario:
+{{ scenario }}
+
+{% if characters %}
+Characters: {{ characters | join(", ") }}
+{% endif %}
+
+Advisory primitive plan:
+{{ plan | tojson(indent=2) }}
+<|CLOSE_SECTION|>
+
+<|SECTION:SAFETY RULES|>
+{% for rule in safety_rules %}
+- {{ rule }}
+{% endfor %}
+<|CLOSE_SECTION|>
+
+<|SECTION:AUTHORING GUIDANCE|>
+- Create only primitives that support the requested scenario.
+- Prefer generic systems over genre-specific hardcoding.
+- Make prompt-visible context prose-like and keep hidden mechanics hidden.
+- Create enough deck cards and roll-table rows to be useful.
+- Treat the plan as advisory; use the scenario and character context as the source of truth.
+- Use only the authoring callbacks below to stage primitive data in the existing draft.
+- Do not validate the draft and do not commit the draft. Validation and commit are handled by the caller after authoring.
+<|CLOSE_SECTION|>
+
+<|SECTION:FUNCTION CALLING INSTRUCTIONS|>
+{{ focal.render_instructions() }}
+
+{{ focal.callbacks.create_anchor.render("Stage an anchor required by the planned systems.") }}
+{{ focal.callbacks.create_meter.render("Stage a bounded numeric meter on an existing anchor.") }}
+{{ focal.callbacks.create_clock.render("Stage a segmented progress clock on an existing anchor.") }}
+{{ focal.callbacks.create_deck.render("Stage a reusable deck with enough distinct cards to support play.") }}
+{{ focal.callbacks.create_roll_table.render("Stage a useful roll table with complete rows and resolution data.") }}
+{{ focal.callbacks.create_relationship_model.render("Stage relationship dimensions between scenario characters.") }}
+{{ focal.callbacks.create_modifier.render("Stage a modifier only when its condition and mechanical effect are clear.") }}
+{{ focal.callbacks.create_attribute_source.render("Stage a derived primitive attribute source; never replace character base attributes with mechanics.") }}
+<|CLOSE_SECTION|>
+
+<|SECTION:TASK|>
+Author the useful systems from the advisory plan by calling the staging functions. Skip systems that are unnecessary, unsafe, unsupported, or cannot be represented coherently. Do not call validation or commit functions, and do not claim that the draft is valid or committed.
+<|CLOSE_SECTION|>
+
+{{ bot_token }}

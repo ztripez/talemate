@@ -200,6 +200,9 @@ class Scene(Emitter):
         # List of game state paths to watch in debug tools
         self.game_state_watch_paths: list[str] = []
 
+        # Transient, JSON-compatible outcome of opted-in primitive initialization.
+        self.primitive_scenario_bundle_initialization_result: dict | None = None
+
         # if the user has requested to cancel the current action
         # or series of agent actions this will be true
         #

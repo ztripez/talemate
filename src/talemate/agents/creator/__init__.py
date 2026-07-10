@@ -1,25 +1,29 @@
 from __future__ import annotations
 
+import talemate.agents.creator.nodes  # noqa: F401
 import talemate.client as client
-from talemate.agents.base import Agent, set_processing
-from talemate.agents.registry import register
+from talemate.agents.base import (
+    Agent,
+    AgentAction,
+    optimize_prompt_caching_action,
+    set_processing,
+)
 from talemate.agents.memory.rag import MemoryRAGMixin
+from talemate.agents.registry import register
 from talemate.prompts import Prompt
 
 from .assistant import AssistantMixin
 from .character import CharacterCreatorMixin
+from .primitives import ScenarioPrimitiveCreatorMixin
 from .response_specs import TITLE_SPEC
 from .scenario import ScenarioCreatorMixin
-
-from talemate.agents.base import AgentAction, optimize_prompt_caching_action
-
-import talemate.agents.creator.nodes  # noqa: F401
 
 
 @register()
 class CreatorAgent(
     CharacterCreatorMixin,
     ScenarioCreatorMixin,
+    ScenarioPrimitiveCreatorMixin,
     AssistantMixin,
     MemoryRAGMixin,
     Agent,

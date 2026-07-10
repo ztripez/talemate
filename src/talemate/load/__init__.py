@@ -46,6 +46,7 @@ from talemate.load.character_card import (
     load_character_from_image,
     load_character_from_json,
 )
+from talemate.load.initialization import initialize_scene_primitives
 
 __all__ = [
     "load_scene",
@@ -68,6 +69,8 @@ def to_project_name(name: str) -> str:
 
 
 class SceneInitialization(pydantic.BaseModel):
+    """Options applied while constructing and initializing a new scene."""
+
     project_name: str | None = None
     content_classification: str | None = None
     agent_persona_templates: dict[str, str | None] | None = None
@@ -80,6 +83,20 @@ class SceneInitialization(pydantic.BaseModel):
     assets: dict | None = None
     intent_state: SceneIntent | None = None
     character_card_import_options: CharacterCardImportOptions | None = None
+    generate_primitive_bundle: pydantic.StrictBool = pydantic.Field(
+        False,
+        description=(
+            "Explicit opt-in to generate and commit a primitive scenario bundle; "
+            "must be a boolean and defaults to false"
+        ),
+    )
+    primitive_bundle_description: pydantic.StrictStr | None = pydantic.Field(
+        None,
+        description=(
+            "Optional non-coerced premise used first for opted-in primitive bundle "
+            "generation; defaults to none"
+        ),
+    )
 
     @pydantic.computed_field(description="Content classification")
     @property
@@ -402,6 +419,7 @@ async def load_scene_from_data(
 
     # Initialize intro and title for new scenes
     await _initialize_scene_intro(scene, scene_data, empty)
+    await initialize_scene_primitives(scene, scene_data, empty)
 
     return scene
 
