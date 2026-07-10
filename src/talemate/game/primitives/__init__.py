@@ -11,7 +11,13 @@ from talemate.game.primitives.anchors import (
     character_anchor,
     object_anchor,
     relationship_anchor,
+    relationship_participants,
     scene_anchor,
+)
+from talemate.game.primitives.attributes import (
+    AttributeResolution,
+    AttributeResolver,
+    AttributeSource,
 )
 from talemate.game.primitives.conditions import (
     PrimitiveCondition,
@@ -56,6 +62,9 @@ from talemate.game.primitives.store import PrimitiveStore
 
 __all__ = [
     "AnchorRef",
+    "AttributeResolution",
+    "AttributeResolver",
+    "AttributeSource",
     "DeckCard",
     "DeckDefinition",
     "DeckDrawOptions",
@@ -88,5 +97,6 @@ __all__ = [
     "parse_dice",
     "parse_range",
     "relationship_anchor",
+    "relationship_participants",
     "scene_anchor",
 ]

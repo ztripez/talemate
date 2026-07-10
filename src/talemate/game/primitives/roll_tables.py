@@ -13,7 +13,7 @@ import pydantic
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
 from talemate.game.primitives.conditions import (
     PrimitiveConditionGroup,
-    evaluate_condition_input,
+    conditions_match,
 )
 from talemate.game.primitives.effects import Effect
 from talemate.game.primitives.effects import apply_effects as apply_effect_batch
@@ -484,7 +484,7 @@ class RollTableEngine:
         for modifier_ref in definition.modifiers:
             modifier = _lookup_modifier(store, modifier_ref)
             applies = modifier.applies_to in {definition.id, source_id}
-            active = applies and _conditions_match(scene, modifier.when)
+            active = applies and conditions_match(scene, modifier.when)
             debug.append(
                 RollModifierDebugEntry(
                     id=modifier.id,
@@ -522,7 +522,7 @@ def _condition_filter(
     active: list[RollTableRow] = []
     inactive: list[RollTableRow] = []
     for row in rows:
-        if _conditions_match(scene, row.conditions):
+        if conditions_match(scene, row.conditions):
             active.append(row)
         else:
             inactive.append(row)
@@ -538,16 +538,6 @@ def _weighted_pool(scene: "Scene", rows: list[RollTableRow]) -> WeightedPool:
         weighted_rows=weighted_rows,
         total_weight=sum(float(row.weight) for row in weighted_rows),
     )
-
-
-def _conditions_match(scene: "Scene", groups: list[PrimitiveConditionGroup]) -> bool:
-    if not groups:
-        return True
-    group_payloads = [
-        group.model_dump(mode="json", exclude_none=True) for group in groups
-    ]
-    matches, _ = evaluate_condition_input(scene, group_payloads)
-    return matches
 
 
 def _match_dice_row(

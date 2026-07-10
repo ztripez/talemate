@@ -6,7 +6,8 @@ Talemate graph execution. Each node reads the active scene from
 """
 
 from talemate.context import active_scene
-from talemate.game.engine.nodes.core import UNRESOLVED, GraphState, Node
+from talemate.game.engine.nodes.core import GraphState, Node
+from talemate.game.engine.nodes.primitives.helpers import optional_input
 from talemate.game.engine.nodes.registry import register
 from talemate.game.primitives.decks import DeckDrawRequest, DeckEngine
 
@@ -60,11 +61,11 @@ class Draw(Node):
                 "deck": self.require_input("deck"),
                 "anchor": self.normalized_input_value("anchor"),
                 "instance_id": self.normalized_input_value("instance_id"),
-                "include_tags": _optional_input(self, "include_tags", []),
-                "exclude_tags": _optional_input(self, "exclude_tags", []),
-                "avoid_recent": _optional_input(self, "avoid_recent", None),
-                "context": _optional_input(self, "context", {}),
-                "apply_effects": _optional_input(self, "apply_effects", False),
+                "include_tags": optional_input(self, "include_tags", []),
+                "exclude_tags": optional_input(self, "exclude_tags", []),
+                "avoid_recent": optional_input(self, "avoid_recent", None),
+                "context": optional_input(self, "context", {}),
+                "apply_effects": optional_input(self, "apply_effects", False),
             }
         )
         result = DeckEngine().draw(
@@ -204,9 +205,3 @@ class Reset(Node):
             instance_id=self.normalized_input_value("instance_id"),
         )
         self.set_output_values({"state": runtime.model_dump(mode="json")})
-
-
-def _optional_input(node: Node, name: str, default):
-    """Return an optional node input while preserving explicit ``None``."""
-    value = node.get_input_value(name)
-    return default if value is UNRESOLVED else value

@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import pydantic
 
 from talemate.game.primitives.anchors import (
-    AnchorRef,
     PrimitiveRef,
     relationship_anchor,
+    relationship_participants,
 )
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
+from talemate.game.primitives.render import RenderPolicy
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.game.primitives.values import primitive_payload_value
 
@@ -44,7 +45,7 @@ class RelationshipDimension(pydantic.BaseModel):
     min: pydantic.StrictInt | pydantic.StrictFloat = -5
     max: pydantic.StrictInt | pydantic.StrictFloat = 5
     label: str | None = None
-    render_policy: Literal["hidden", "summary", "prompt", "memory"] = "summary"
+    render_policy: RenderPolicy = "summary"
 
     @pydantic.model_validator(mode="after")
     def validate_bounds(self) -> "RelationshipDimension":
@@ -84,7 +85,7 @@ class RelationshipSetRequest(pydantic.BaseModel):
     min: pydantic.StrictInt | pydantic.StrictFloat = -5
     max: pydantic.StrictInt | pydantic.StrictFloat = 5
     label: str | None = None
-    render_policy: Literal["hidden", "summary", "prompt", "memory"] = "summary"
+    render_policy: RenderPolicy = "summary"
 
     @pydantic.model_validator(mode="after")
     def validate_request(self) -> "RelationshipSetRequest":
@@ -301,7 +302,7 @@ class RelationshipGraph:
         min: int | float = -5,
         max: int | float = 5,
         label: str | None = None,
-        render_policy: Literal["hidden", "summary", "prompt", "memory"] = "summary",
+        render_policy: RenderPolicy = "summary",
     ) -> RelationshipDimension:
         """Store one bounded dimension value and record a ledger entry.
 
@@ -493,7 +494,7 @@ class RelationshipGraph:
         store = PrimitiveStore.for_scene(scene)
         summaries = []
         for anchor_key in store.iter_anchor_keys(kind="relationship"):
-            source, target = _participants_from_anchor(anchor_key)
+            source, target = relationship_participants(anchor_key)
             if source != character:
                 continue
             if other is not None and target != other:
@@ -587,13 +588,6 @@ def _require_finite(name: str, value: int | float) -> None:
         raise ValueError(f"{name} must be numeric")
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite")
-
-
-def _participants_from_anchor(anchor_key: str) -> tuple[str, str]:
-    """Return source and target participants from a relationship anchor key."""
-    anchor = AnchorRef.parse(anchor_key)
-    source, target = anchor.id.split("->", 1)
-    return source, target
 
 
 def _default_summary(source: str, target: str, dimension: RelationshipDimension) -> str:

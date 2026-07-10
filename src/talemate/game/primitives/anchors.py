@@ -317,3 +317,22 @@ def relationship_anchor(source: str, target: str) -> AnchorRef:
             relationship id violates anchor validation rules.
     """
     return AnchorRef(kind="relationship", id=f"{source}->{target}")
+
+
+def relationship_participants(anchor: AnchorRef | str) -> tuple[str, str]:
+    """Return source and target participant ids from a relationship anchor.
+
+    Args:
+        anchor: Relationship anchor model or canonical relationship anchor string.
+
+    Returns:
+        Tuple containing the source participant id and target participant id.
+
+    Raises:
+        InvalidAnchorRef: If ``anchor`` is a string that cannot be parsed.
+        ValueError: If ``anchor`` is not a relationship anchor.
+    """
+    anchor_ref = AnchorRef.parse(anchor) if isinstance(anchor, str) else anchor
+    if anchor_ref.kind != "relationship":
+        raise ValueError("relationship_participants requires relationship anchor")
+    return tuple(anchor_ref.id.split("->", 1))

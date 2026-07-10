@@ -18,7 +18,7 @@ import pydantic
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
 from talemate.game.primitives.conditions import (
     PrimitiveConditionGroup,
-    evaluate_condition_input,
+    conditions_match,
 )
 from talemate.game.primitives.effects import Effect, apply_effects
 from talemate.game.primitives.exceptions import PrimitiveError
@@ -274,14 +274,12 @@ class DeckInstancePayload(pydantic.BaseModel):
     Attributes:
         definition: Stored definition id or inline deck definition payload.
         runtime: Persisted runtime state for this deck instance.
-        render_policy: Rendering hint for prompt/UI integrations.
     """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
     definition: str | DeckDefinition
     runtime: DeckRuntimeState
-    render_policy: str = "hidden"
 
 
 class DeckPeekResult(pydantic.BaseModel):
@@ -655,7 +653,6 @@ def _persist_deck_state(
     payload = DeckInstancePayload(
         definition=definition.id,
         runtime=state,
-        render_policy="hidden",
     ).model_dump(mode="json")
     store.set_runtime_primitive(
         ref,
@@ -689,7 +686,7 @@ def _filter_cards(
         card = cards[card_id]
         if card_id in state.exhausted or state.cooldowns.get(card_id, 0) > 0:
             continue
-        if not _conditions_match(scene, card.conditions):
+        if not conditions_match(scene, card.conditions):
             continue
         if options.include_tags and not set(options.include_tags).issubset(card.tags):
             continue
@@ -738,14 +735,6 @@ def _decrement_cooldowns(state: DeckRuntimeState, *, selected: str) -> None:
         if remaining > 0:
             next_cooldowns[card_id] = remaining
     state.cooldowns = next_cooldowns
-
-
-def _conditions_match(scene: "Scene", groups: list[PrimitiveConditionGroup]) -> bool:
-    if not groups:
-        return True
-    payload = [group.model_dump(mode="json", exclude_none=True) for group in groups]
-    matches, _ = evaluate_condition_input(scene, payload)
-    return matches
 
 
 def _debug(

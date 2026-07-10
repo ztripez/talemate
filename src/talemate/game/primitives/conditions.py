@@ -21,12 +21,24 @@ Operator = ConditionOperator
 
 
 class PrimitiveCondition(pydantic.BaseModel):
-    """Validated predicate over scene game state or primitive state.
+    """Validated predicate over scene game state or Game Primitive state.
 
-    ``kind`` selects the required fields: path and primitive conditions require
-    ``path``; tag conditions require ``anchor`` and ``tag``; anchored meter,
-    relationship, and clock conditions require enough fields to build a
-    primitive reference.
+    A primitive-aware condition is a Boolean test used to gate primitive operations
+    against scene state, primitive payloads, anchor tags, meters, clocks, or
+    relationship meters.
+
+    Attributes:
+        kind: Condition source and evaluation mode.
+        path: Scene-state path or full primitive reference used by path-like
+            conditions.
+        operator: Comparison operator applied to the actual and expected values.
+        value: JSON-compatible expected value for comparison.
+        anchor: Anchor reference used by tag, meter, clock, and relationship
+            conditions.
+        tag: Anchor tag tested by tag conditions.
+        dimension: Primitive id used when building anchored meter, clock, or
+            relationship references.
+        data: Reserved JSON-compatible metadata for future condition extensions.
     """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -52,7 +64,17 @@ class PrimitiveCondition(pydantic.BaseModel):
 
     @pydantic.model_validator(mode="after")
     def validate_kind_payload(self) -> "PrimitiveCondition":
-        """Validate the fields required by this condition kind."""
+        """Validate the fields required by the selected condition kind.
+
+        Returns:
+            The validated primitive condition.
+
+        Raises:
+            ValueError: If the selected condition kind is missing required fields
+                or uses a non-relationship anchor for a relationship condition.
+            InvalidAnchorRef: If an anchor reference cannot be parsed.
+            InvalidPrimitiveRef: If a primitive reference cannot be parsed.
+        """
         if self.kind == "path":
             _require_text(self.path, "path condition requires path")
         elif self.kind == "primitive":
@@ -85,7 +107,17 @@ class PrimitiveCondition(pydantic.BaseModel):
 
 
 class PrimitiveConditionResult(pydantic.BaseModel):
-    """Debug result for one primitive condition evaluation."""
+    """Debug result for one primitive condition evaluation.
+
+    Attributes:
+        matches: Whether the condition matched the current scene state.
+        kind: Condition kind that was evaluated.
+        path: Optional scene-state or primitive path read by the condition.
+        actual: JSON-compatible actual value read from the scene or primitive store.
+        expected: JSON-compatible expected value supplied by the condition.
+        operator: Comparison operator applied to ``actual`` and ``expected``.
+        message: Optional explanation for unconditional or special-case results.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -99,7 +131,13 @@ class PrimitiveConditionResult(pydantic.BaseModel):
 
 
 class PrimitiveConditionGroup(pydantic.BaseModel):
-    """AND/OR group of primitive-aware conditions."""
+    """Boolean group of primitive-aware conditions.
+
+    Attributes:
+        operator: Group operator. ``and`` requires all conditions to match;
+            ``or`` requires at least one condition to match.
+        conditions: Conditions evaluated inside this group.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
@@ -108,7 +146,13 @@ class PrimitiveConditionGroup(pydantic.BaseModel):
 
 
 class PrimitiveConditionGroupResult(pydantic.BaseModel):
-    """Debug result for one evaluated primitive condition group."""
+    """Debug result for one evaluated primitive condition group.
+
+    Attributes:
+        operator: Boolean operator used by the group.
+        matches: Whether the group matched after applying ``operator``.
+        conditions: Per-condition debug results produced while evaluating the group.
+    """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -120,7 +164,26 @@ class PrimitiveConditionGroupResult(pydantic.BaseModel):
 def evaluate_condition_input(
     scene: Any, condition: dict | list | PrimitiveCondition | PrimitiveConditionGroup
 ) -> tuple[bool, list[dict[str, Any]]]:
-    """Evaluate a condition, group, or group list and return matches plus debug."""
+    """Evaluate primitive-aware condition payloads and return match status.
+
+    Args:
+        scene: Talemate scene or scene-like object whose ``game_state`` and
+            primitive store are read during condition evaluation.
+        condition: Single condition, single condition group, list of conditions
+            treated as one ``and`` group, or list of group dictionaries treated as
+            alternatives where any matching group returns ``True``.
+
+    Returns:
+        Tuple containing whether any normalized condition group matched and a list
+        of JSON-compatible debug dictionaries for each evaluated group.
+
+    Raises:
+        ValueError: If the condition payload shape is unsupported or required
+            fields for a condition kind are missing.
+        pydantic.ValidationError: If a condition or group payload fails model
+            validation.
+        PrimitiveStoreError: If condition evaluation reads invalid primitive state.
+    """
     groups = _normalize_condition_groups(condition)
     store = PrimitiveStore.for_scene(scene) if _groups_require_store(groups) else None
     all_debug: list[PrimitiveConditionGroupResult] = []
@@ -136,10 +199,47 @@ def evaluate_condition_input(
     ]
 
 
+def conditions_match(scene: Any, groups: list[PrimitiveConditionGroup]) -> bool:
+    """Return whether primitive condition groups permit an operation.
+
+    Args:
+        scene: Talemate scene or scene-like object read by condition evaluation.
+        groups: Primitive condition groups to evaluate. An empty list means the
+            operation is unconditional and therefore matches.
+
+    Returns:
+        ``True`` when no groups are provided or at least one condition group
+        matches, otherwise ``False``.
+
+    Raises:
+        ValueError: If a condition payload is invalid for its selected kind.
+        PrimitiveStoreError: If condition evaluation reads invalid primitive state.
+    """
+    if not groups:
+        return True
+    store = PrimitiveStore.for_scene(scene) if _groups_require_store(groups) else None
+    return any(
+        evaluate_condition_group(scene, store, group).matches for group in groups
+    )
+
+
 def evaluate_condition_group(
     scene: Any, store: PrimitiveStore | None, group: PrimitiveConditionGroup
 ) -> PrimitiveConditionGroupResult:
-    """Evaluate one primitive condition group."""
+    """Evaluate one primitive condition group.
+
+    Args:
+        scene: Talemate scene or scene-like object read by condition evaluation.
+        store: Optional primitive store used by primitive and anchor-tag conditions.
+        group: Boolean group of primitive-aware conditions.
+
+    Returns:
+        Debug result containing the group match value and condition debug records.
+
+    Raises:
+        ValueError: If a condition requires a primitive store that was not supplied.
+        PrimitiveStoreError: If primitive state read during evaluation is invalid.
+    """
     if not group.conditions:
         return PrimitiveConditionGroupResult(
             operator=group.operator, matches=False, conditions=[]
@@ -160,7 +260,23 @@ def evaluate_condition_group(
 def evaluate_condition(
     scene: Any, store: PrimitiveStore | None, condition: PrimitiveCondition | dict
 ) -> PrimitiveConditionResult:
-    """Evaluate one primitive-aware condition without mutating state."""
+    """Evaluate one primitive-aware condition without mutating state.
+
+    Args:
+        scene: Talemate scene or scene-like object read by condition evaluation.
+        store: Optional primitive store used by primitive and anchor-tag conditions.
+        condition: Condition model or dictionary payload to evaluate.
+
+    Returns:
+        Debug result describing whether the condition matched and what value was
+        compared.
+
+    Raises:
+        ValueError: If the condition requires a primitive store that was not
+            supplied or uses invalid field combinations.
+        pydantic.ValidationError: If a dictionary condition payload is invalid.
+        PrimitiveStoreError: If primitive state read during evaluation is invalid.
+    """
     cond = (
         condition
         if isinstance(condition, PrimitiveCondition)
@@ -189,7 +305,20 @@ def evaluate_condition(
 
 
 def compare_values(actual: Any, operator: str, expected: Any = None) -> bool:
-    """Compare values using Talemate game-state condition operator semantics."""
+    """Compare values using Talemate game-state condition operator semantics.
+
+    Args:
+        actual: Value read from scene state or primitive state.
+        operator: Condition operator string such as ``==``, ``>=``, or ``is_true``.
+        expected: Optional expected value supplied by the condition.
+
+    Returns:
+        ``True`` when ``actual`` satisfies ``operator`` against ``expected``.
+
+    Raises:
+        ValueError: If ``operator`` is not supported by Talemate condition
+            comparison semantics.
+    """
     return compare_condition_values(actual, operator, expected)
 
 
