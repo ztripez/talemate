@@ -50,7 +50,7 @@ from talemate.game.primitives.render import (
     render_policy_visible,
 )
 from talemate.game.primitives.roll_tables import RollTableEngine
-from talemate.game.primitives.store import PrimitiveStore
+from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
@@ -285,12 +285,19 @@ class AttributeResolver:
         )
         return request.source
 
-    def get(self, scene: "Scene", ref: PrimitiveRef | str) -> AttributeSource:
+    def get(
+        self,
+        scene: "Scene",
+        ref: PrimitiveRef | str,
+        *,
+        store: PrimitiveStoreReader | None = None,
+    ) -> AttributeSource:
         """Return a stored primitive attribute source.
 
         Args:
             scene: Talemate scene containing the primitive store.
             ref: Attribute primitive reference to read.
+            store: Optional already validated primitive store.
 
         Returns:
             Stored attribute source model.
@@ -302,7 +309,9 @@ class AttributeResolver:
             pydantic.ValidationError: If the stored source payload is invalid.
         """
         primitive_ref = _coerce_attribute_ref(ref)
-        payload = PrimitiveStore.for_scene(scene).get_primitive(primitive_ref)
+        payload = (store or PrimitiveStore.for_scene(scene)).get_primitive(
+            primitive_ref
+        )
         if payload is None:
             raise PrimitiveError(f"Attribute source not found: {primitive_ref.key()}")
         return AttributeSource.model_validate(payload)
@@ -313,6 +322,7 @@ class AttributeResolver:
         ref: PrimitiveRef | str,
         *,
         context: dict[str, Any] | None = None,
+        store: PrimitiveStoreReader | None = None,
     ) -> AttributeResolution:
         """Resolve one primitive attribute source into a value.
 
@@ -321,6 +331,7 @@ class AttributeResolver:
             ref: Attribute primitive reference to resolve.
             context: Optional JSON-compatible trace metadata copied into source
                 engine calls.
+            store: Optional already validated primitive store.
 
         Returns:
             Attribute resolution containing value, render policy, and debug data.
@@ -333,16 +344,30 @@ class AttributeResolver:
                 evaluation encounters invalid condition data.
         """
         primitive_ref = _coerce_attribute_ref(ref)
-        source = self.get(scene, primitive_ref)
+        source = self.get(scene, primitive_ref, store=store)
+        return self._resolve(scene, primitive_ref, source, context=context, store=store)
+
+    def _resolve(
+        self,
+        scene: "Scene",
+        primitive_ref: PrimitiveRef,
+        source: AttributeSource,
+        *,
+        context: dict[str, Any] | None,
+        store: PrimitiveStoreReader | None,
+    ) -> AttributeResolution:
+        """Resolve an already loaded attribute source."""
         context_payload = _validate_context(context)
-        if not conditions_match(scene, source.conditions):
+        if not conditions_match(scene, source.conditions, store=store):
             return AttributeResolution(
                 ref=primitive_ref.key(),
                 source=source.source,
                 render_policy=source.render_policy,
                 debug={"active": False, "reason": "conditions"},
             )
-        value, rendered, debug = self._resolve_source(scene, source, context_payload)
+        value, rendered, debug = self._resolve_source(
+            scene, source, context_payload, store=store
+        )
         return AttributeResolution(
             ref=primitive_ref.key(),
             source=source.source,
@@ -359,6 +384,7 @@ class AttributeResolver:
         *,
         audience: str = "prompt",
         context: dict[str, Any] | None = None,
+        store: PrimitiveStoreReader | None = None,
     ) -> str:
         """Render one primitive attribute for an audience.
 
@@ -369,6 +395,7 @@ class AttributeResolver:
                 ``memory``.
             context: Optional JSON-compatible trace metadata copied into source
                 engine calls.
+            store: Optional already validated primitive store.
 
         Returns:
             Prompt-safe rendered text, or an empty string when hidden or inactive.
@@ -383,8 +410,11 @@ class AttributeResolver:
                 pre-rendered text.
         """
         audience_value = _validate_audience(audience)
-        resolution = self.resolve(scene, ref, context=context)
-        source = self.get(scene, ref)
+        primitive_ref = _coerce_attribute_ref(ref)
+        source = self.get(scene, primitive_ref, store=store)
+        resolution = self._resolve(
+            scene, primitive_ref, source, context=context, store=store
+        )
         return self.render_resolution(source, resolution, audience=audience_value)
 
     def render_resolution(
@@ -429,6 +459,8 @@ class AttributeResolver:
         scene: "Scene",
         source: AttributeSource,
         context: dict[str, pydantic.JsonValue],
+        *,
+        store: PrimitiveStoreReader | None = None,
     ) -> tuple[pydantic.JsonValue | None, str | None, dict[str, pydantic.JsonValue]]:
         """Resolve a validated attribute source through the matching source engine.
 
@@ -436,6 +468,7 @@ class AttributeResolver:
             scene: Talemate scene containing primitive state.
             source: Validated attribute source to resolve.
             context: JSON-compatible trace metadata passed to source engines.
+            store: Optional already validated primitive store.
 
         Returns:
             Tuple containing the resolved JSON-compatible value, optional
@@ -450,11 +483,13 @@ class AttributeResolver:
         if source.source == "literal":
             return copy.deepcopy(source.value), None, {"source": "literal"}
         if source.source == "meter":
-            return _resolve_primitive_value(scene, source, "meters")
+            return _resolve_primitive_value(scene, source, "meters", store=store)
         if source.source == "clock":
-            return _resolve_primitive_value(scene, source, "clocks")
+            return _resolve_primitive_value(scene, source, "clocks", store=store)
         if source.source == "relationship":
-            return resolve_relationship_source(scene, source, self.relationship_graph)
+            return resolve_relationship_source(
+                scene, source, self.relationship_graph, store=store
+            )
         if source.source == "deck":
             return resolve_deck_source(scene, source, context, self.deck_engine)
         if source.source == "roll_table":

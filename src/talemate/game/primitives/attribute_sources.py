@@ -15,7 +15,7 @@ from talemate.game.primitives.conditions import conditions_match
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.modifiers import RollModifier
 from talemate.game.primitives.selection import SelectionResult
-from talemate.game.primitives.store import PrimitiveStore
+from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 from talemate.game.primitives.values import primitive_payload_value
 
 if TYPE_CHECKING:
@@ -179,7 +179,11 @@ def validate_context(context: dict[str, Any] | None) -> dict[str, pydantic.JsonV
 
 
 def resolve_primitive_value(
-    scene: "Scene", source: Any, expected_kind: str
+    scene: "Scene",
+    source: Any,
+    expected_kind: str,
+    *,
+    store: PrimitiveStoreReader | None = None,
 ) -> tuple[pydantic.JsonValue | None, str | None, dict[str, pydantic.JsonValue]]:
     """Resolve a scalar primitive payload for meter and clock attributes.
 
@@ -187,6 +191,7 @@ def resolve_primitive_value(
         scene: Talemate scene containing primitive state.
         source: Attribute source object with ``id``, ``ref``, and ``source`` fields.
         expected_kind: Primitive kind required by the source, such as ``meters``.
+        store: Optional already validated primitive store.
 
     Returns:
         Tuple of resolved JSON value, optional pre-rendered text, and debug payload.
@@ -201,7 +206,7 @@ def resolve_primitive_value(
         raise PrimitiveError(
             f"Attribute source '{source.id}' requires {expected_kind} ref"
         )
-    payload = PrimitiveStore.for_scene(scene).get_primitive(ref)
+    payload = (store or PrimitiveStore.for_scene(scene)).get_primitive(ref)
     if payload is None:
         raise PrimitiveError(f"Primitive not found: {ref.key()}")
     return (
@@ -355,7 +360,11 @@ def resolve_roll_table_source(
 
 
 def resolve_relationship_source(
-    scene: "Scene", source: Any, relationship_graph: Any
+    scene: "Scene",
+    source: Any,
+    relationship_graph: Any,
+    *,
+    store: PrimitiveStoreReader | None = None,
 ) -> tuple[pydantic.JsonValue | None, str | None, dict[str, pydantic.JsonValue]]:
     """Resolve a relationship-backed primitive attribute source.
 
@@ -363,6 +372,7 @@ def resolve_relationship_source(
         scene: Talemate scene containing relationship primitive state.
         source: Attribute source whose ``ref`` is a relationship anchor or meter ref.
         relationship_graph: Relationship graph used to read values and summaries.
+        store: Optional already validated primitive store.
 
     Returns:
         Tuple of resolved value, optional relationship summary, and debug payload.
@@ -384,14 +394,14 @@ def resolve_relationship_source(
                 "Relationship anchor attributes require mode='summary'"
             )
         source_id, target_id = relationship_participants(anchor)
-        summary = relationship_graph.summary(scene, source_id, target_id)
+        summary = relationship_graph.summary(scene, source_id, target_id, store=store)
         return summary, summary, {"source": "relationship", "mode": "summary"}
     ref = PrimitiveRef.parse(source_ref)
     if ref.anchor.kind != "relationship" or ref.kind != "meters":
         raise PrimitiveError("Relationship attribute requires relationship meter ref")
     source_id, target_id = relationship_participants(ref.anchor)
-    value = relationship_graph.get(scene, source_id, target_id, ref.id)
-    summary = relationship_graph.summary(scene, source_id, target_id)
+    value = relationship_graph.get(scene, source_id, target_id, ref.id, store=store)
+    summary = relationship_graph.summary(scene, source_id, target_id, store=store)
     if options.mode == "summary":
         return summary, summary or None, {"source": "relationship", "mode": "summary"}
     return value, summary or None, {"source": "relationship", "dimension": ref.id}

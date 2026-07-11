@@ -8,6 +8,7 @@ from typing import Any, Literal
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
+from talemate.game.primitives.definitions import MeterPayload
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.store import PrimitiveStore
@@ -85,13 +86,17 @@ def apply_effects(
     *,
     reason: str | None = None,
 ) -> EffectBatchResult:
-    """Apply effects in order and stop on the first validation or mutation error."""
+    """Atomically apply an ordered effect batch and stop on the first error."""
     results: list[EffectResult] = []
 
     if isinstance(effects, (Effect, dict)):
         raw_effects = [effects]
+        effect_store = store
     elif isinstance(effects, list):
         raw_effects = effects
+        effect_store = PrimitiveStore(
+            copy.deepcopy(store.root), store.max_ledger_length
+        )
     else:
         return EffectBatchResult(
             ok=False,
@@ -108,7 +113,7 @@ def apply_effects(
         effect = raw_effect if isinstance(raw_effect, Effect) else None
         try:
             effect = Effect.model_validate(raw_effect)
-            result = apply_effect(store, effect, reason=reason)
+            result = apply_effect(effect_store, effect, reason=reason)
         except Exception as exc:
             op = effect.op if effect is not None else "effect"
             target = effect.target if effect is not None else None
@@ -117,7 +122,10 @@ def apply_effects(
         if not result.ok:
             break
 
-    return EffectBatchResult(ok=all(result.ok for result in results), results=results)
+    ok = all(result.ok for result in results)
+    if ok and effect_store is not store:
+        store.replace_validated_root(effect_store.root)
+    return EffectBatchResult(ok=ok, results=results)
 
 
 def apply_effect(
@@ -241,6 +249,17 @@ def _updated_value_payload(
         from talemate.game.primitives.relationships import relationship_value_payload
 
         return relationship_value_payload(ref, previous_payload, value)
+    if ref.kind == "meters":
+        if isinstance(value, dict) or previous_payload is None:
+            model = MeterPayload.model_validate(value)
+        else:
+            model = MeterPayload.model_validate(previous_payload).model_copy(
+                update={"value": copy.deepcopy(value)}
+            )
+            model = MeterPayload.model_validate(model.model_dump())
+        if model.id != ref.id:
+            raise ValueError(f"Meter key '{ref.id}' must match id '{model.id}'")
+        return model.model_dump(mode="json")
     if isinstance(previous_payload, dict) and "value" in previous_payload:
         payload = copy.deepcopy(previous_payload)
         payload["value"] = copy.deepcopy(value)

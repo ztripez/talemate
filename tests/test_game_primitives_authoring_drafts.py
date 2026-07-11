@@ -99,7 +99,14 @@ def test_primitive_definitions_roundtrip_as_direct_definitions_object():
 
     model = PrimitiveDefinitions.model_validate(definitions)
     dumped = model.model_dump(mode="json")
-    root_dump = PrimitiveRootPayload(definitions=model).model_dump(mode="json")
+    root_dump = PrimitiveRootPayload(
+        version=1,
+        definitions=model,
+        anchors={},
+        runtime={},
+        ledger=[],
+        drafts={},
+    ).model_dump(mode="json")
     draft_dump = PrimitiveDraft(id="draft", definitions=model).model_dump(mode="json")
 
     assert set(dumped) == set(DEFINITION_KINDS)

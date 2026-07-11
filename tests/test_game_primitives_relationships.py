@@ -66,17 +66,16 @@ def test_relationship_set_adjust_bounds_and_records_ledger():
     assert entries[-1]["output"] == {"previous": 4, "current": 5}
 
 
-def test_relationship_reads_canonical_and_legacy_value_payloads():
-    """Relationship dimensions accept canonical and wrapped legacy values."""
+def test_relationship_reads_only_canonical_meter_payloads():
+    """Relationship dimensions require canonical bounded meter payloads."""
     scene = Scene()
     graph = RelationshipGraph()
     store = PrimitiveStore.for_scene(scene)
-    store.set_primitive("relationship:Model->Photographer/meters/trust", {"value": 2})
     store.set_primitive(
-        "relationship:Model->Photographer/meters/comfort",
+        "relationship:Model->Photographer/meters/trust",
         {
-            "id": "comfort",
-            "value": 3,
+            "id": "trust",
+            "value": 2,
             "min": -5,
             "max": 5,
             "render_policy": "summary",
@@ -84,25 +83,22 @@ def test_relationship_reads_canonical_and_legacy_value_payloads():
     )
 
     assert graph.get(scene, "Model", "Photographer", "trust") == 2
-    assert graph.get(scene, "Model", "Photographer", "comfort") == 3
-
-    store.set_primitive(
-        "relationship:Model->Photographer/meters/respect", {"id": "respect"}
-    )
     with pytest.raises(ValueError, match="Field required"):
-        graph.get(scene, "Model", "Photographer", "respect")
+        store.set_primitive(
+            "relationship:Model->Photographer/meters/comfort", {"value": 3}
+        )
+    with pytest.raises(ValueError, match="within min and max"):
+        store.set_primitive(
+            "relationship:Model->Photographer/meters/comfort",
+            {"id": "comfort", "value": 6, "min": -5, "max": 5},
+        )
 
-    store.set_primitive(
-        "relationship:Model->Photographer/meters/trust",
-        {"value": 2, "unexpected": True},
+
+def test_relationship_payload_reader_rejects_noncanonical_values():
+    """Relationship reads reject scalar and value-only persistence shapes."""
+    dimension = _dimension_from_payload(
+        "trust", {"id": "trust", "value": 2, "min": -5, "max": 5}
     )
-    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
-        graph.get(scene, "Model", "Photographer", "trust")
-
-
-def test_relationship_reads_strict_legacy_scalar_payload():
-    """Legacy scalars use the same strict persisted-payload adapter."""
-    dimension = _dimension_from_payload("trust", 2, -5, 5)
 
     assert dimension is not None
     assert dimension.model_dump(mode="json") == {
@@ -111,10 +107,12 @@ def test_relationship_reads_strict_legacy_scalar_payload():
         "min": -5,
         "max": 5,
         "value": 2,
-        "render_policy": "summary",
+        "render_policy": "hidden",
     }
-    with pytest.raises(ValueError, match="valid integer|valid number"):
-        _dimension_from_payload("trust", "2", -5, 5)
+    with pytest.raises(ValueError, match="valid dictionary|model_type"):
+        _dimension_from_payload("trust", 2)
+    with pytest.raises(ValueError, match="Field required"):
+        _dimension_from_payload("trust", {"value": 2})
 
 
 def test_relationship_summary_omits_hidden_dimensions_and_raw_numbers():

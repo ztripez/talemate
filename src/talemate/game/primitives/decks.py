@@ -131,7 +131,7 @@ class DeckRuntimeState(pydantic.BaseModel):
     deterministic draw counter for one anchored deck primitive.
 
     Attributes:
-        definition_id: Optional deck definition id used to initialize the state.
+        definition_id: Deck definition id used to initialize the state.
         mode: Deck mode copied from the definition.
         draw_pile: Ordered card ids available to draw-pile modes.
         discard: Card ids already drawn from draw-pile modes.
@@ -144,7 +144,7 @@ class DeckRuntimeState(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    definition_id: str | None = None
+    definition_id: str = pydantic.Field(min_length=1)
     mode: Literal["sample", "draw", "bag", "physical"]
     draw_pile: list[str] = pydantic.Field(default_factory=list)
     discard: list[str] = pydantic.Field(default_factory=list)
@@ -271,14 +271,25 @@ class DeckInstancePayload(pydantic.BaseModel):
     """Validated persisted payload for one deck primitive instance.
 
     Attributes:
-        definition: Stored definition id or inline deck definition payload.
+        definition: Stored deck definition id.
         runtime: Persisted runtime state for this deck instance.
     """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    definition: str | DeckDefinition
+    definition: str = pydantic.Field(min_length=1)
     runtime: DeckRuntimeState
+
+    @pydantic.model_validator(mode="after")
+    def validate_definition_id(self) -> "DeckInstancePayload":
+        """Require the runtime state to belong to the referenced definition."""
+        if self.runtime.definition_id != self.definition:
+            raise ValueError(
+                "Deck runtime definition_id "
+                f"'{self.runtime.definition_id}' must match definition "
+                f"'{self.definition}'"
+            )
+        return self
 
     @classmethod
     def create(
@@ -301,23 +312,6 @@ class DeckInstancePayload(pydantic.BaseModel):
             definition=definition.id,
             runtime=_initial_state(definition, instance_ref.key()),
         )
-
-
-class LegacyDeckValuePayload(pydantic.BaseModel):
-    """Validated legacy wrapper containing an inline deck definition.
-
-    Attributes:
-        value: Inline deck definition stored by legacy primitive payloads.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    value: DeckDefinition
-
-
-_DECK_INSTANCE_ADAPTER = pydantic.TypeAdapter(
-    DeckInstancePayload | DeckDefinition | LegacyDeckValuePayload
-)
 
 
 class DeckPeekResult(pydantic.BaseModel):
@@ -428,7 +422,12 @@ class DeckEngine:
             {} if options is None else options
         )
         store = PrimitiveStore.for_scene(scene)
-        definition, ref, state = self._resolve_deck(store, deck, anchor, instance_id)
+        candidate_store = PrimitiveStore(
+            copy.deepcopy(store.root), store.max_ledger_length
+        )
+        definition, ref, state = self._resolve_deck(
+            candidate_store, deck, anchor, instance_id
+        )
         candidates = _mode_candidates(definition, state)
         filtered, relaxed = _filter_cards(
             scene, definition, state, candidates, draw_options
@@ -439,8 +438,8 @@ class DeckEngine:
         debug = _debug(definition, state, candidates, filtered, relaxed, draw_options)
         _apply_state_transition(definition, state, card, filtered)
         result = _selection_from_card(definition, ref, card, debug)
-        _persist_deck_state(store, ref, definition, state)
-        store.append_ledger(
+        _persist_deck_state(candidate_store, ref, definition, state)
+        candidate_store.append_ledger(
             LedgerEntry(
                 op="deck.draw",
                 ref=ref.key(),
@@ -460,7 +459,7 @@ class DeckEngine:
         )
         if draw_options.apply_effects and result.effects:
             effect_result = apply_effects(
-                store, result.effects, reason=f"deck:{ref.key()}"
+                candidate_store, result.effects, reason=f"deck:{ref.key()}"
             )
             result.debug["applied_effects"] = effect_result.model_dump(
                 mode="json", exclude_none=True
@@ -472,6 +471,7 @@ class DeckEngine:
             result = SelectionResult.model_validate(result_payload)
             if not effect_result.ok:
                 raise PrimitiveError(f"Deck effects failed: {effect_result.results}")
+        store.replace_validated_root(candidate_store.root)
         return result
 
     def peek(
@@ -596,12 +596,8 @@ class DeckEngine:
             payload = store.get_primitive(ref)
             if payload is None:
                 raise PrimitiveError(f"Deck primitive not found: {ref.key()}")
-            definition = _definition_from_instance(store, payload)
-            return (
-                definition,
-                ref,
-                _runtime_from_payload(payload, definition, ref.key()),
-            )
+            definition, state = _resolve_persisted_instance(store, payload, ref.key())
+            return definition, ref, state
         payload = store.get_definition("decks", deck_text)
         if payload is None:
             raise PrimitiveError(f"Deck definition not found: {deck_text}")
@@ -657,28 +653,61 @@ def _runtime_for_ref(
 def _runtime_from_payload(
     payload: dict, definition: DeckDefinition, seed: str
 ) -> DeckRuntimeState:
-    if not isinstance(payload, dict):
-        raise PrimitiveError(f"Deck instance {seed} payload must be a dictionary")
-    instance = DeckInstancePayload.model_validate(payload)
+    instance = _instance_from_payload(payload, seed)
     state = instance.runtime
-    if state.mode != definition.mode:
-        raise PrimitiveError("Persisted deck runtime mode does not match definition")
+    _validate_runtime_state(state, definition, seed)
     return state
 
 
-def _definition_from_instance(store: PrimitiveStore, payload: dict) -> DeckDefinition:
-    instance = _DECK_INSTANCE_ADAPTER.validate_python(payload)
-    if isinstance(instance, DeckDefinition):
-        return instance
-    if isinstance(instance, LegacyDeckValuePayload):
-        return instance.value
-    definition_ref = instance.definition
-    if isinstance(definition_ref, DeckDefinition):
-        return definition_ref
-    definition = store.get_definition("decks", definition_ref)
-    if definition is None:
-        raise PrimitiveError(f"Deck definition not found: {definition_ref}")
-    return DeckDefinition.model_validate(definition)
+def _validate_runtime_state(
+    state: DeckRuntimeState, definition: DeckDefinition, seed: str
+) -> None:
+    if state.definition_id != definition.id:
+        raise PrimitiveError(
+            f"Persisted deck runtime for {seed} has definition_id "
+            f"'{state.definition_id}', expected '{definition.id}'"
+        )
+    if state.mode != definition.mode:
+        raise PrimitiveError(
+            f"Persisted deck runtime for {seed} has mode '{state.mode}', "
+            f"expected '{definition.mode}'"
+        )
+
+    card_ids = {card.id for card in definition.cards}
+    runtime_card_ids = (
+        set(state.draw_pile)
+        | set(state.discard)
+        | set(state.recent)
+        | set(state.cooldowns)
+        | set(state.exhausted)
+    )
+    unknown_ids = sorted(runtime_card_ids - card_ids)
+    if unknown_ids:
+        raise PrimitiveError(
+            f"Persisted deck runtime for {seed} references unknown card IDs "
+            f"for definition '{definition.id}': {', '.join(unknown_ids)}"
+        )
+
+
+def _instance_from_payload(payload: dict, seed: str) -> DeckInstancePayload:
+    if not isinstance(payload, dict):
+        raise PrimitiveError(f"Deck instance {seed} payload must be a dictionary")
+    try:
+        return DeckInstancePayload.model_validate(payload)
+    except pydantic.ValidationError as exc:
+        raise PrimitiveError(f"Invalid persisted deck instance {seed}: {exc}") from exc
+
+
+def _resolve_persisted_instance(
+    store: PrimitiveStore, payload: dict, seed: str
+) -> tuple[DeckDefinition, DeckRuntimeState]:
+    instance = _instance_from_payload(payload, seed)
+    definition_payload = store.get_definition("decks", instance.definition)
+    if definition_payload is None:
+        raise PrimitiveError(f"Deck definition not found: {instance.definition}")
+    definition = DeckDefinition.model_validate(definition_payload)
+    _validate_runtime_state(instance.runtime, definition, seed)
+    return definition, instance.runtime
 
 
 def _persist_deck_state(

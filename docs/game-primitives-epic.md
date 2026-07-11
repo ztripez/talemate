@@ -152,6 +152,10 @@ Required work:
   - row tags/metadata
 - Implement modifiers for roll totals.
 - Implement odds preview for simple dice/range and weighted tables.
+- Keep anchored roll-table instances id-only (`{"definition": "table-id"}`);
+  inline definitions remain valid request inputs but are not persisted instances.
+- Resolve definitions and conditions on the scene owner thread, then run only the
+  detached exact odds calculation in a worker thread.
 - Add node wrappers:
   - `RollTable.Roll`
   - `RollTable.PreviewOdds`

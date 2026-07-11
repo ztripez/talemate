@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
+from talemate.game.primitives.adventure import AdventureDefinition
 from talemate.game.primitives.attribute_sources import (
     DeckAttributeOptions,
     RollTableAttributeOptions,
@@ -25,6 +26,7 @@ from talemate.game.primitives.schema import (
     DraftValidation,
     PrimitiveDraft,
     PrimitiveRootPayload,
+    RollTableInstancePayload,
 )
 from talemate.game.primitives.store import PrimitiveStore
 
@@ -63,6 +65,7 @@ class PrimitiveDraftValidator:
             self._validate_collisions(scene, draft, errors)
             candidate = self.candidate_root(scene, draft)
             self._validate_attribute_refs(candidate, errors, warnings)
+            self._validate_instance_definition_refs(candidate, errors)
             self._validate_modifier_targets(candidate, errors)
             self._validate_condition_refs(candidate, errors)
             self._validate_forbidden_destinations(candidate, errors)
@@ -196,6 +199,23 @@ class PrimitiveDraftValidator:
                 if handler is not None:
                     handler(source.ref)
 
+    def _validate_instance_definition_refs(
+        self, root: PrimitiveRootPayload, errors: list[str]
+    ) -> None:
+        """Require every anchored roll-table instance to reference a definition."""
+        definitions = root.definitions["roll_tables"]
+        for anchor_key, anchor in root.anchors.items():
+            for instance_id, payload in anchor.primitives.get(
+                "roll_tables", {}
+            ).items():
+                instance = RollTableInstancePayload.model_validate(payload)
+                if instance.definition not in definitions:
+                    errors.append(
+                        "Missing roll table definition for "
+                        f"{anchor_key}/roll_tables/{instance_id}: "
+                        f"{instance.definition}"
+                    )
+
     def _validate_modifier_targets(
         self, root: PrimitiveRootPayload, errors: list[str]
     ) -> None:
@@ -230,6 +250,10 @@ class PrimitiveDraftValidator:
             table = RollTableDefinition.model_validate(payload)
             for row in table.rows:
                 groups.extend(row.conditions)
+        for payload in root.definitions["adventures"].values():
+            adventure = AdventureDefinition.model_validate(payload)
+            for transition in adventure.transitions.values():
+                groups.extend(transition.conditions)
 
         handlers = {
             "primitive": lambda condition: self._validate_primitive_condition(

@@ -21,7 +21,11 @@ from talemate.game.primitives import (
     relationship_anchor,
     scene_anchor,
 )
-from talemate.game.primitives.schema import CURRENT_VERSION, GAME_PRIMITIVES_KEY
+from talemate.game.primitives.schema import (
+    CURRENT_VERSION,
+    GAME_PRIMITIVES_KEY,
+    default_root,
+)
 from talemate.tale_mate import Scene
 
 
@@ -141,21 +145,36 @@ def test_store_for_scene_initializes_missing_root_shape():
     assert store.root["ledger"] == []
 
 
-def test_store_for_scene_migrates_partial_root_shape():
-    """A partial existing root is filled without discarding authored data."""
+def test_read_snapshot_is_validated_and_detached_from_mutable_state():
+    """Snapshot reads cannot mutate or observe later changes to scene state."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_primitive(
+        "scene:main/meters/danger",
+        {"id": "danger", "value": 2, "min": 0, "max": 5},
+    )
+    snapshot = PrimitiveStore.read_snapshot_for_scene(scene)
+
+    returned = snapshot.get_primitive("scene:main/meters/danger")
+    returned["value"] = 4
+    store.set_runtime_primitive(
+        "scene:main/meters/danger",
+        {"id": "danger", "value": 5, "min": 0, "max": 5},
+    )
+
+    assert snapshot.get_primitive("scene:main/meters/danger")["value"] == 2
+    assert store.get_primitive("scene:main/meters/danger")["value"] == 5
+
+
+def test_store_for_scene_rejects_partial_existing_root_shape():
+    """An existing root must explicitly contain every current-version field."""
     scene = Scene()
     scene.game_state.variables[GAME_PRIMITIVES_KEY] = {
         "definitions": {"relationship_models": {"poses": {"cards": []}}}
     }
 
-    store = PrimitiveStore.for_scene(scene)
-
-    assert store.root["version"] == CURRENT_VERSION
-    assert store.root["definitions"]["relationship_models"] == {"poses": {"cards": []}}
-    assert store.root["definitions"]["meters"] == {}
-    assert store.root["anchors"] == {}
-    assert store.root["runtime"] == {}
-    assert store.root["ledger"] == []
+    with pytest.raises(PrimitiveStoreError, match="Field required"):
+        PrimitiveStore.for_scene(scene)
 
 
 def test_store_for_scene_rejects_invalid_existing_root():
@@ -240,7 +259,7 @@ def test_store_for_scene_rejects_invalid_ledger_limit_before_mutation(limit):
 
 def test_direct_store_constructor_validates_and_shapes_root():
     """Direct store construction validates and initializes the root immediately."""
-    root = {}
+    root = default_root()
     store = PrimitiveStore(root, max_ledger_length=2)
 
     assert store.root is root
@@ -267,14 +286,17 @@ def test_store_anchor_and_primitive_crud():
     anchor_copy["tags"].append("mutated-get-copy")
     assert store.get_anchor("character:Model")["tags"] == []
 
-    value = {"value": 2, "min": 0, "max": 5}
+    value = {"id": "confidence", "value": 2, "min": 0, "max": 5}
     store.set_primitive("character:Model/meters/confidence", value)
     value["value"] = 99
 
     assert store.get_primitive("character:Model/meters/confidence") == {
         "value": 2,
+        "id": "confidence",
+        "label": None,
         "min": 0,
         "max": 5,
+        "render_policy": "hidden",
     }
     returned = store.get_primitive("character:Model/meters/confidence")
     returned["value"] = 99
@@ -290,20 +312,21 @@ def test_store_anchor_and_primitive_crud():
     set_entry, delete_entry = store.recent_ledger(2)
     assert set_entry["op"] == "primitive.set"
     assert set_entry["ref"] == "character:Model/meters/confidence"
-    assert set_entry["input"] == {"value": {"value": 2, "min": 0, "max": 5}}
+    canonical = store.root["ledger"][0]["input"]["value"]
+    assert set_entry["input"] == {"value": canonical}
     assert set_entry["output"] == {
         "previous": None,
-        "current": {"value": 2, "min": 0, "max": 5},
+        "current": canonical,
     }
     assert delete_entry["op"] == "primitive.delete"
     assert delete_entry["ref"] == "character:Model/meters/confidence"
-    assert delete_entry["output"] == {"previous": {"value": 2, "min": 0, "max": 5}}
+    assert delete_entry["output"] == {"previous": canonical}
 
 
 def test_store_copy_on_read_deep_copies_nested_payloads():
     """Primitive and ledger reads deep-copy nested JSON payloads."""
     store = PrimitiveStore.for_scene(Scene())
-    ref = "scene:main/meters/tension"
+    ref = "scene:main/values/tension"
     original = {"value": {"history": [{"n": 1}]}}
 
     store.set_primitive(ref, original)
@@ -327,9 +350,9 @@ def test_store_revalidates_mutated_ref_objects_before_use():
     ref.kind = " meters "
     ref.id = " tension "
 
-    store.set_primitive(ref, {"value": 1})
+    store.set_primitive(ref, {"id": "tension", "value": 1, "min": 0, "max": 5})
 
-    assert store.get_primitive("scene:main/meters/tension") == {"value": 1}
+    assert store.get_primitive("scene:main/meters/tension")["value"] == 1
     assert (
         list(store.root["anchors"]["scene:main"]["primitives"].keys()).count("meters")
         == 1
@@ -439,7 +462,10 @@ def test_delete_primitive_ledger_failure_does_not_remove_primitive():
     """Delete validates ledger state before removing primitive data."""
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
-    store.set_primitive("scene:main/meters/tension", {"value": 1})
+    store.set_primitive(
+        "scene:main/meters/tension",
+        {"id": "tension", "value": 1, "min": 0, "max": 5},
+    )
     before = scene.game_state.model_dump(mode="json")
     store.root["ledger"] = {}
 
@@ -456,7 +482,10 @@ def test_delete_primitive_ledger_limit_failure_does_not_remove_primitive():
     """Delete validates ledger retention limits before removing primitive data."""
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
-    store.set_primitive("scene:main/meters/tension", {"value": 1})
+    store.set_primitive(
+        "scene:main/meters/tension",
+        {"id": "tension", "value": 1, "min": 0, "max": 5},
+    )
     before = scene.game_state.model_dump(mode="json")
     store.max_ledger_length = False
 
@@ -464,7 +493,7 @@ def test_delete_primitive_ledger_limit_failure_does_not_remove_primitive():
         store.delete_primitive("scene:main/meters/tension")
 
     assert scene.game_state.model_dump(mode="json") == before
-    assert store.get_primitive("scene:main/meters/tension") == {"value": 1}
+    assert store.get_primitive("scene:main/meters/tension")["value"] == 1
 
     store.max_ledger_length = 0
     with pytest.raises(PrimitiveStoreError):
@@ -540,7 +569,7 @@ def test_ledger_append_and_trimming():
 
 def test_append_ledger_invalid_limit_does_not_normalize_partial_root():
     """Append validates ledger limit before normalizing persisted root shape."""
-    root = {"ledger": []}
+    root = default_root()
     store = PrimitiveStore(root, max_ledger_length=1)
     root.pop("definitions")
     before = copy.deepcopy(root)
@@ -554,7 +583,7 @@ def test_append_ledger_invalid_limit_does_not_normalize_partial_root():
 
 def test_append_ledger_invalid_entry_does_not_normalize_partial_root():
     """Append validates new entries before normalizing persisted root shape."""
-    root = {"ledger": []}
+    root = default_root()
     store = PrimitiveStore(root, max_ledger_length=1)
     root.pop("definitions")
     before = copy.deepcopy(root)
@@ -591,7 +620,10 @@ def test_store_root_is_json_serializable_and_reloadable():
     """Primitive state survives a game-state-level JSON round trip."""
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
-    store.set_primitive("scene:main/meters/tension", {"value": 4, "tags": ["public"]})
+    store.set_primitive(
+        "scene:main/meters/tension",
+        {"id": "tension", "value": 4, "min": 0, "max": 10},
+    )
     store.append_ledger({"op": "test.render", "input": {"anchor": "scene:main"}})
 
     dumped = json.dumps(scene.game_state.model_dump(mode="json"))
@@ -601,8 +633,5 @@ def test_store_root_is_json_serializable_and_reloadable():
     reloaded_scene.game_state.variables = loaded["variables"]
     reloaded_store = PrimitiveStore.for_scene(reloaded_scene)
 
-    assert reloaded_store.get_primitive("scene:main/meters/tension") == {
-        "value": 4,
-        "tags": ["public"],
-    }
+    assert reloaded_store.get_primitive("scene:main/meters/tension")["value"] == 4
     assert reloaded_store.recent_ledger(1)[0]["op"] == "test.render"

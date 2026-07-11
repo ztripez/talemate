@@ -17,13 +17,16 @@ indirectly by their happy-path tests; the swallow-on-error case is tested
 via list_packages with a bogus install_node_module property.
 """
 
+import asyncio
 import json
 import os
+import threading
 
 import pydantic
 import pytest
 
 from talemate.game.engine.nodes.core import UNRESOLVED, Graph, ModuleProperty, Node
+from talemate.game.engine.nodes import packaging as packaging_module
 from talemate.game.engine.nodes.packaging import (
     SCENE_PACKAGE_INFO_FILENAME,
     InstallNodeModule,
@@ -271,6 +274,71 @@ async def test_get_scene_package_info_returns_empty_when_file_missing(scene):
     assert info.packages == []
 
 
+@pytest.mark.asyncio
+async def test_get_scene_package_info_reads_off_event_loop(scene, monkeypatch):
+    event_loop_thread = threading.get_ident()
+    read_threads = []
+    read_package_info = packaging_module._read_scene_package_info_sync
+
+    def record_read_thread(info_dir):
+        read_threads.append(threading.get_ident())
+        return read_package_info(info_dir)
+
+    monkeypatch.setattr(
+        packaging_module, "_read_scene_package_info_sync", record_read_thread
+    )
+
+    await get_scene_package_info(scene)
+
+    assert read_threads
+    assert read_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_save_scene_package_info_runs_atomic_write_off_event_loop(
+    scene, monkeypatch
+):
+    event_loop_thread = threading.get_ident()
+    write_threads = []
+    atomic_write = packaging_module._atomic_write_scene_package_info
+
+    def record_write_thread(info_dir, serialized):
+        write_threads.append(threading.get_ident())
+        atomic_write(info_dir, serialized)
+
+    monkeypatch.setattr(
+        packaging_module, "_atomic_write_scene_package_info", record_write_thread
+    )
+
+    await save_scene_package_info(scene, ScenePackageInfo(packages=[]))
+
+    assert write_threads
+    assert write_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_save_scene_package_info_preserves_existing_file_on_replace_failure(
+    scene, monkeypatch
+):
+    pkg = _sample_package_data()
+    await save_scene_package_info(scene, ScenePackageInfo(packages=[pkg]))
+    filepath = os.path.join(scene.info_dir, SCENE_PACKAGE_INFO_FILENAME)
+    with open(filepath, "r", encoding="utf-8") as package_file:
+        original = package_file.read()
+
+    def fail_replace(source, destination):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(packaging_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failure"):
+        await save_scene_package_info(scene, ScenePackageInfo(packages=[]))
+
+    with open(filepath, "r", encoding="utf-8") as package_file:
+        assert package_file.read() == original
+    assert os.listdir(scene.info_dir) == [SCENE_PACKAGE_INFO_FILENAME]
+
+
 # ---------------------------------------------------------------------------
 # install_package / update_package_properties / uninstall_package
 # ---------------------------------------------------------------------------
@@ -290,13 +358,30 @@ async def test_install_package_marks_installed_and_persists(scene):
 @pytest.mark.asyncio
 async def test_install_package_idempotent_when_already_installed(scene):
     pkg = _sample_package_data("alpha/beta")
-    await install_package(scene, pkg)
+    pkg.name = "Persisted name"
+    installed = await install_package(scene, pkg)
 
     # Second install should not duplicate or raise
     pkg2 = _sample_package_data("alpha/beta")
-    await install_package(scene, pkg2)
+    pkg2.name = "Caller discovery name"
+    existing = await install_package(scene, pkg2)
     info = await get_scene_package_info(scene)
+
+    assert existing is not pkg2
+    assert existing.name == installed.name == "Persisted name"
     assert sum(1 for p in info.packages if p.registry == "alpha/beta") == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_installs_preserve_all_packages(scene):
+    packages = [_sample_package_data(f"test/pkg/{index}") for index in range(5)]
+
+    await asyncio.gather(*(install_package(scene, package) for package in packages))
+
+    info = await get_scene_package_info(scene)
+    assert {package.registry for package in info.packages} == {
+        package.registry for package in packages
+    }
 
 
 @pytest.mark.asyncio
@@ -376,6 +461,63 @@ async def test_uninstall_package_strips_installed_node_ids_from_active_loop(scen
     await uninstall_package(scene, pkg.registry)
 
     assert fake_node.id not in scene_loop.nodes
+
+
+@pytest.mark.asyncio
+async def test_uninstall_package_holds_scene_lock_during_runtime_cleanup(
+    scene, monkeypatch
+):
+    scene_loop = SceneLoop()
+    scene.creative_node_graph = scene_loop
+    pkg = _sample_package_data()
+    await install_package(scene, pkg)
+    installed_node = InstallNodeModule()
+    scene_loop.add_node(installed_node)
+    info = await get_scene_package_info(scene)
+    info.get_package(pkg.registry).installed_nodes = [installed_node.id]
+    await save_scene_package_info(scene, info)
+    disconnect = packaging_module._disconnect_package_node
+    lock_states = []
+
+    def record_lock_state(node):
+        lock_states.append(packaging_module._scene_package_lock(scene).locked())
+        disconnect(node)
+
+    monkeypatch.setattr(packaging_module, "_disconnect_package_node", record_lock_state)
+
+    await uninstall_package(scene, pkg.registry)
+
+    assert lock_states == [True]
+
+
+@pytest.mark.asyncio
+async def test_uninstall_package_keeps_runtime_nodes_when_persistence_fails(
+    scene, monkeypatch
+):
+    scene_loop = SceneLoop()
+    scene.creative_node_graph = scene_loop
+    pkg = _sample_package_data()
+    await install_package(scene, pkg)
+
+    installed_node = InstallNodeModule()
+    scene_loop.add_node(installed_node)
+    info = await get_scene_package_info(scene)
+    info.get_package(pkg.registry).installed_nodes = [installed_node.id]
+    await save_scene_package_info(scene, info)
+
+    def fail_atomic_write(info_dir, serialized):
+        raise OSError("simulated persistence failure")
+
+    monkeypatch.setattr(
+        packaging_module, "_atomic_write_scene_package_info", fail_atomic_write
+    )
+
+    with pytest.raises(OSError, match="persistence failure"):
+        await uninstall_package(scene, pkg.registry)
+
+    persisted = await get_scene_package_info(scene)
+    assert persisted.has_package(pkg.registry)
+    assert installed_node.id in scene_loop.nodes
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +772,68 @@ async def test_initialize_package_adds_node_with_promoted_property_value(
     ]
     assert len(added) == 1
     assert added[0].properties.get("an_int") == 42
+
+
+@pytest.mark.asyncio
+async def test_initialize_and_property_update_do_not_overwrite_each_other(
+    package_test_classes, scene, monkeypatch
+):
+    scene_loop = SceneLoop()
+    pkg = PackageData(
+        name="Example",
+        author="Tester",
+        description="d",
+        installable=True,
+        registry="test/pkg/ExamplePackage",
+        install_nodes=["test/pkg/InstallableModule"],
+        package_properties={
+            "an_int_exposed": PackageProperty(
+                module="test/pkg/InstallableModule",
+                name="an_int",
+                label="An Int",
+                description="d",
+                type="int",
+                default=0,
+                value=42,
+                required=True,
+            )
+        },
+    )
+    await install_package(scene, pkg)
+    initialization_read = asyncio.Event()
+    continue_initialization = asyncio.Event()
+    get_package_info = packaging_module.get_scene_package_info
+    reads = 0
+
+    async def pause_first_read(target_scene):
+        nonlocal reads
+        info = await get_package_info(target_scene)
+        reads += 1
+        if reads == 1:
+            initialization_read.set()
+            await continue_initialization.wait()
+        return info
+
+    monkeypatch.setattr(packaging_module, "get_scene_package_info", pause_first_read)
+    initialize_task = asyncio.create_task(initialize_package(scene, scene_loop, pkg))
+    await initialization_read.wait()
+    replacement = pkg.package_properties["an_int_exposed"].model_copy(
+        update={"value": 999}
+    )
+    update_task = asyncio.create_task(
+        update_package_properties(scene, pkg.registry, {"an_int_exposed": replacement})
+    )
+    await asyncio.sleep(0)
+    assert not update_task.done()
+
+    continue_initialization.set()
+    initialized, updated = await asyncio.gather(initialize_task, update_task)
+    persisted = await get_scene_package_info(scene)
+    persisted_package = persisted.get_package(pkg.registry)
+
+    assert updated is not None
+    assert persisted_package.package_properties["an_int_exposed"].value == 999
+    assert persisted_package.installed_nodes == initialized.installed_nodes
 
 
 @pytest.mark.asyncio

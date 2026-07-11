@@ -16,68 +16,12 @@ from talemate.game.primitives.definitions import MeterPayload
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.render import RenderPolicy
-from talemate.game.primitives.store import PrimitiveStore
+from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
 
 _MISSING = object()
-
-
-class _CanonicalRelationshipPayload(MeterPayload):
-    """Strict canonical persisted relationship dimension payload."""
-
-    model_config = pydantic.ConfigDict(
-        extra="forbid",
-        allow_inf_nan=False,
-        str_strip_whitespace=True,
-        strict=True,
-    )
-
-    def to_meter_payload(
-        self, dimension: str, min_value: int | float, max_value: int | float
-    ) -> MeterPayload:
-        """Return this canonical payload as the public meter model."""
-        return MeterPayload.model_validate(self.model_dump())
-
-
-class _RelationshipValuePayload(pydantic.BaseModel):
-    """Legacy value-only relationship dimension payload."""
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
-
-    value: pydantic.StrictInt | pydantic.StrictFloat
-
-    def to_meter_payload(
-        self, dimension: str, min_value: int | float, max_value: int | float
-    ) -> MeterPayload:
-        """Convert a legacy value object to a canonical relationship meter."""
-        return relationship_meter(
-            id=dimension, value=self.value, min=min_value, max=max_value
-        )
-
-
-class _RelationshipScalarPayload(
-    pydantic.RootModel[pydantic.StrictInt | pydantic.StrictFloat]
-):
-    """Legacy scalar relationship dimension payload."""
-
-    model_config = pydantic.ConfigDict(allow_inf_nan=False, strict=True)
-
-    def to_meter_payload(
-        self, dimension: str, min_value: int | float, max_value: int | float
-    ) -> MeterPayload:
-        """Wrap a legacy scalar in a canonical relationship meter."""
-        return relationship_meter(
-            id=dimension, value=self.root, min=min_value, max=max_value
-        )
-
-
-_RELATIONSHIP_PAYLOAD_ADAPTER = pydantic.TypeAdapter(
-    _CanonicalRelationshipPayload
-    | _RelationshipValuePayload
-    | _RelationshipScalarPayload
-)
 
 
 def relationship_meter(**payload: object) -> MeterPayload:
@@ -289,6 +233,8 @@ class RelationshipGraph:
         target: str,
         dimension: str,
         default=_MISSING,
+        *,
+        store: PrimitiveStoreReader | None = None,
     ):
         """Return one stored dimension value for a directional edge.
 
@@ -298,6 +244,7 @@ class RelationshipGraph:
             target: Target participant for the directed edge.
             dimension: Non-empty relationship dimension id.
             default: Explicit fallback returned when the dimension is absent.
+            store: Optional already validated primitive store.
 
         Returns:
             Stored finite numeric dimension value, or explicit fallback.
@@ -306,7 +253,7 @@ class RelationshipGraph:
             PrimitiveError: If the dimension is absent and no default is given.
             pydantic.ValidationError: If stored payload validation fails.
         """
-        store = PrimitiveStore.for_scene(scene)
+        store = store or PrimitiveStore.for_scene(scene)
         ref = _dimension_ref(source, target, dimension)
         payload = store.get_primitive(ref)
         if payload is None:
@@ -314,7 +261,7 @@ class RelationshipGraph:
                 raise PrimitiveError(f"Relationship dimension not found: {ref.key()}")
             _require_finite("default", default)
             return default
-        return _dimension_from_payload(dimension, payload, -5, 5).value
+        return _dimension_from_payload(dimension, payload).value
 
     def set(
         self,
@@ -368,7 +315,7 @@ class RelationshipGraph:
         ref = _dimension_ref(request.source, request.target, request.dimension)
         previous_payload = store.get_primitive(ref)
         previous_dimension = _dimension_from_payload(
-            request.dimension, previous_payload, request.min, request.max
+            request.dimension, previous_payload
         )
         previous = previous_dimension.value if previous_dimension else None
         model = relationship_meter(
@@ -439,7 +386,7 @@ class RelationshipGraph:
         ref = _dimension_ref(request.source, request.target, request.dimension)
         previous_payload = store.get_primitive(ref)
         previous_dimension = _dimension_from_payload(
-            request.dimension, previous_payload, request.min, request.max
+            request.dimension, previous_payload
         )
         previous = previous_dimension.value if previous_dimension else None
         base = 0 if previous is None else previous
@@ -470,7 +417,13 @@ class RelationshipGraph:
         return model, previous
 
     def summary(
-        self, scene: "Scene", source: str, target: str, audience: str = "prompt"
+        self,
+        scene: "Scene",
+        source: str,
+        target: str,
+        audience: str = "prompt",
+        *,
+        store: PrimitiveStoreReader | None = None,
     ) -> str:
         """Render prompt-safe prose for one directional relationship edge.
 
@@ -480,6 +433,7 @@ class RelationshipGraph:
             target: Target participant for the directed edge.
             audience: Visibility audience; ``"prompt"`` includes ``summary`` and
                 ``prompt`` render policies.
+            store: Optional already validated primitive store.
 
         Returns:
             Prompt-safe prose without raw hidden dimension numbers.
@@ -491,7 +445,7 @@ class RelationshipGraph:
         """
         visible = {"summary", "prompt"} if audience == "prompt" else {audience}
         parts = []
-        for dimension in self._dimensions(scene, source, target):
+        for dimension in self._dimensions(scene, source, target, store=store):
             if dimension.render_policy not in visible:
                 continue
             text = _default_summary(source, target, dimension)
@@ -530,12 +484,17 @@ class RelationshipGraph:
         return summaries
 
     def _dimensions(
-        self, scene: "Scene", source: str, target: str
+        self,
+        scene: "Scene",
+        source: str,
+        target: str,
+        *,
+        store: PrimitiveStoreReader | None = None,
     ) -> list[MeterPayload]:
-        store = PrimitiveStore.for_scene(scene)
+        store = store or PrimitiveStore.for_scene(scene)
         anchor = relationship_anchor(source, target)
         return [
-            _dimension_from_payload(dimension_id, payload, -5, 5)
+            _dimension_from_payload(dimension_id, payload)
             for dimension_id, payload in store.iter_primitives(anchor, "meters").items()
         ]
 
@@ -550,15 +509,16 @@ def _dimension_ref(source: str, target: str, dimension: str) -> PrimitiveRef:
 def _dimension_from_payload(
     dimension: str,
     payload: object | None,
-    min_value: int | float,
-    max_value: int | float,
 ) -> MeterPayload | None:
     """Return a validated dimension model from a primitive payload."""
     if payload is None:
         return None
-    return _RELATIONSHIP_PAYLOAD_ADAPTER.validate_python(payload).to_meter_payload(
-        dimension, min_value, max_value
-    )
+    model = MeterPayload.model_validate(payload)
+    if model.id != dimension:
+        raise ValueError(
+            f"Relationship meter key '{dimension}' must match id '{model.id}'"
+        )
+    return model
 
 
 def relationship_value_payload(
@@ -583,7 +543,7 @@ def relationship_value_payload(
         raise PrimitiveError(
             "relationship_value_payload requires relationship meter ref"
         )
-    previous = _dimension_from_payload(ref.id, previous_payload, -5, 5)
+    previous = _dimension_from_payload(ref.id, previous_payload)
     model = relationship_meter(
         id=ref.id,
         value=value,

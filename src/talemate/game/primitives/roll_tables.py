@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import itertools
 import random
 import re
 from typing import TYPE_CHECKING, Literal
@@ -20,6 +19,7 @@ from talemate.game.primitives.effects import apply_effects as apply_effect_batch
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.modifiers import RollModifier
+from talemate.game.primitives.schema import RollTableInstancePayload
 from talemate.game.primitives.selection import SelectionResult
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.game.primitives.values import primitive_payload_value
@@ -29,6 +29,11 @@ if TYPE_CHECKING:
 
 _DICE_RE = re.compile(r"^(?P<count>[1-9][0-9]*)d(?P<sides>[1-9][0-9]*)$")
 _RANGE_RE = re.compile(r"^(?P<start>-?[0-9]+)\s*-\s*(?P<end>-?[0-9]+)$")
+
+# These limits keep rolling and exact odds previews within a predictable amount
+# of CPU and memory while covering conventional tabletop dice pools.
+MAX_DICE_COUNT = 100
+MAX_DICE_SIDES = 1_000
 
 
 class RollTableRow(pydantic.BaseModel):
@@ -74,7 +79,8 @@ class RollTableDefinition(pydantic.BaseModel):
         id: Non-empty canonical identifier for the table.
         name: Non-empty human-readable table name.
         mode: Selection mode, either dice-total ranges or weighted rows.
-        dice: Dice expression required by dice-mode tables.
+        dice: Dice expression required by dice-mode tables, limited to 100 dice
+            with at most 1,000 sides each.
         rows: Non-empty rows with unique identifiers and mode-specific fields.
         modifiers: Roll modifier identifiers applied when resolving the table.
 
@@ -112,40 +118,15 @@ class RollTableDefinition(pydantic.BaseModel):
         if self.mode == "dice":
             if not self.dice:
                 raise ValueError("Dice roll tables require dice")
-            parse_dice(self.dice)
+            count, sides = parse_dice(self.dice)
+            if count > MAX_DICE_COUNT:
+                raise ValueError(f"Dice count cannot exceed {MAX_DICE_COUNT}: {count}")
+            if sides > MAX_DICE_SIDES:
+                raise ValueError(f"Dice sides cannot exceed {MAX_DICE_SIDES}: {sides}")
             _validate_dice_rows(self.rows)
         else:
             _validate_weighted_rows(self.rows)
         return self
-
-
-class RollTableInstancePayload(pydantic.BaseModel):
-    """Validated persisted payload for one anchored roll-table instance.
-
-    Attributes:
-        definition: Stored definition id or inline roll-table definition payload.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    definition: str | RollTableDefinition
-
-
-class LegacyRollTableValuePayload(pydantic.BaseModel):
-    """Validated legacy wrapper containing an inline roll-table definition.
-
-    Attributes:
-        value: Inline roll-table definition stored by legacy primitive payloads.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    value: RollTableDefinition
-
-
-_ROLL_TABLE_INSTANCE_ADAPTER = pydantic.TypeAdapter(
-    RollTableInstancePayload | RollTableDefinition | LegacyRollTableValuePayload
-)
 
 
 class RollTableRollRequest(pydantic.BaseModel):
@@ -352,6 +333,42 @@ class OddsPreview(pydantic.BaseModel):
     inactive_rows: list[str] = pydantic.Field(default_factory=list)
 
 
+class _OddsPreviewInputRow(pydantic.BaseModel):
+    """Detached condition-filtered row data needed for odds computation."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    id: str
+    label: str
+    weight: pydantic.StrictInt | pydantic.StrictFloat | None = None
+    range: str | int | None = None
+
+
+class _OddsPreviewInput(pydantic.BaseModel):
+    """Detached validated input for pure odds computation."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    source_id: str
+    mode: Literal["dice", "weighted"]
+    dice: str | None = None
+    rows: list[_OddsPreviewInputRow]
+    inactive_rows: list[str] = pydantic.Field(default_factory=list)
+
+    @pydantic.model_validator(mode="after")
+    def validate_mode_rows(self) -> "_OddsPreviewInput":
+        """Require the mode-specific fields used by pure computation."""
+        if self.mode == "dice":
+            if self.dice is None:
+                raise ValueError("Dice odds input requires dice")
+            parse_dice(self.dice)
+            if any(row.range is None for row in self.rows):
+                raise ValueError("Dice odds input rows require ranges")
+        elif any(row.weight is None or row.weight <= 0 for row in self.rows):
+            raise ValueError("Weighted odds input rows require weight > 0")
+        return self
+
+
 class WeightedPool(pydantic.BaseModel):
     """Collect condition-filtered rows used by weighted table operations.
 
@@ -494,38 +511,44 @@ class RollTableEngine:
                 scene, definition, source_id, resolved_anchor, context_payload
             )
 
-        store.append_ledger(
-            LedgerEntry(
-                op="roll_table.roll",
-                ref=source_id if "/" in source_id else None,
-                anchor=resolved_anchor,
-                input=RollTableLedgerInput(
-                    table=source_id, dice=definition.dice, context=context_payload
-                ).model_dump(mode="json", exclude_none=True),
-                output=RollTableLedgerOutput(
-                    raw=result.debug.get("raw"),
-                    rolls=result.debug.get("rolls", []),
-                    modifiers=result.debug.get("modifiers", []),
-                    final=result.debug.get("final"),
-                    result_id=result.result_id,
-                ).model_dump(mode="json", exclude_none=True),
-            )
+        ledger_entry = LedgerEntry(
+            op="roll_table.roll",
+            ref=source_id if "/" in source_id else None,
+            anchor=resolved_anchor,
+            input=RollTableLedgerInput(
+                table=source_id, dice=definition.dice, context=context_payload
+            ).model_dump(mode="json", exclude_none=True),
+            output=RollTableLedgerOutput(
+                raw=result.debug.get("raw"),
+                rolls=result.debug.get("rolls", []),
+                modifiers=result.debug.get("modifiers", []),
+                final=result.debug.get("final"),
+                result_id=result.result_id,
+            ).model_dump(mode="json", exclude_none=True),
         )
 
         if apply_effects and result.effects:
-            effect_result = apply_effect_batch(
-                store, result.effects, reason=f"roll_table:{source_id}"
-            )
-            result.debug["applied_effects"] = effect_result.model_dump(
-                mode="json", exclude_none=True
-            )
-            result_payload = result.model_dump(mode="python")
-            result_payload["debug"] = _validate_debug_payload(result.debug)
-            result = SelectionResult.model_validate(result_payload)
-            if not effect_result.ok:
-                raise PrimitiveError(
-                    f"Roll table effects failed: {effect_result.results}"
+            previous_root = copy.deepcopy(store.root)
+            try:
+                store.append_ledger(ledger_entry)
+                effect_result = apply_effect_batch(
+                    store, result.effects, reason=f"roll_table:{source_id}"
                 )
+                if not effect_result.ok:
+                    raise PrimitiveError(
+                        f"Roll table effects failed: {effect_result.results}"
+                    )
+                result.debug["applied_effects"] = effect_result.model_dump(
+                    mode="json", exclude_none=True
+                )
+                result_payload = result.model_dump(mode="python")
+                result_payload["debug"] = _validate_debug_payload(result.debug)
+                result = SelectionResult.model_validate(result_payload)
+            except Exception:
+                store.replace_validated_root(previous_root)
+                raise
+        else:
+            store.append_ledger(ledger_entry)
         return result
 
     def preview_odds(
@@ -557,50 +580,35 @@ class RollTableEngine:
             Initializes or normalizes the scene primitive store. The method does
             not append ledger entries, advance the random source, or apply effects.
         """
+        prepared = self._prepare_odds_preview(scene, table, anchor=anchor)
+        return _compute_odds_preview(prepared)
+
+    def _prepare_odds_preview(
+        self,
+        scene: "Scene",
+        table: RollTableDefinition | dict | str,
+        *,
+        anchor: AnchorRef | str | None = None,
+    ) -> _OddsPreviewInput:
+        """Resolve a table and conditions into detached computation input."""
         store = PrimitiveStore.for_scene(scene)
         definition, source_id, _ = self._resolve_table(store, table, anchor)
-        if definition.mode == "weighted":
-            pool = _weighted_pool(scene, definition.rows)
-            return OddsPreview(
-                source_id=source_id,
-                mode="weighted",
-                total_weight=pool.total_weight,
-                rows=[
-                    OddsPreviewRow(
-                        id=row.id,
-                        label=row.label,
-                        weight=row.weight,
-                        probability=(
-                            float(row.weight) / pool.total_weight
-                            if pool.total_weight
-                            else 0
-                        ),
-                    )
-                    for row in pool.weighted_rows
-                ],
-                inactive_rows=[row.id for row in pool.inactive_rows],
-            ).model_dump(mode="json", exclude_none=True)
-        count, sides = parse_dice(definition.dice)
         active_rows, inactive_rows = _condition_filter(scene, definition.rows)
-        distribution = _dice_distribution(count, sides)
-        total_outcomes = sum(distribution.values())
-        return OddsPreview(
+        return _OddsPreviewInput(
             source_id=source_id,
-            mode="dice",
+            mode=definition.mode,
             dice=definition.dice,
-            gaps=_range_gaps(definition.rows, count, sides),
             rows=[
-                OddsPreviewRow(
+                _OddsPreviewInputRow(
                     id=row.id,
                     label=row.label,
+                    weight=row.weight,
                     range=row.range,
-                    outcomes=_row_outcome_count(row, distribution),
-                    probability=_row_outcome_count(row, distribution) / total_outcomes,
                 )
                 for row in active_rows
             ],
             inactive_rows=[row.id for row in inactive_rows],
-        ).model_dump(mode="json", exclude_none=True)
+        )
 
     def _roll_dice_table(
         self,
@@ -629,7 +637,7 @@ class RollTableEngine:
             raw=raw,
             modifiers=modifier_debug,
             final=final,
-            gaps=_range_gaps(definition.rows, count, sides),
+            gaps=_range_gaps(active_rows, count, sides),
             inactive_rows=[row.id for row in inactive_rows],
             context=context,
         ).model_dump(mode="json", exclude_none=True)
@@ -734,14 +742,8 @@ class RollTableEngine:
 def _definition_from_instance(
     store: PrimitiveStore, payload: dict
 ) -> RollTableDefinition:
-    """Resolve a direct table payload or canonical anchored instance payload."""
-    instance = _ROLL_TABLE_INSTANCE_ADAPTER.validate_python(payload)
-    if isinstance(instance, RollTableDefinition):
-        return instance
-    if isinstance(instance, LegacyRollTableValuePayload):
-        return instance.value
-    if isinstance(instance.definition, RollTableDefinition):
-        return instance.definition
+    """Resolve a canonical id-only anchored instance payload."""
+    instance = RollTableInstancePayload.model_validate(payload)
     definition = store.get_definition("roll_tables", instance.definition)
     if definition is None:
         raise PrimitiveError(f"Roll table definition not found: {instance.definition}")
@@ -802,31 +804,87 @@ def _match_dice_row(
 
 
 def _range_gaps(rows: list[RollTableRow], count: int, sides: int) -> list[list[int]]:
-    covered: set[int] = set()
+    reachable_start = count
+    reachable_end = count * sides
+    intervals: list[tuple[int, int]] = []
     for row in rows:
         if row.range is None:
             continue
         start, end = parse_range(row.range)
-        covered.update(range(start, end + 1))
+        if end < reachable_start or start > reachable_end:
+            continue
+        intervals.append((max(start, reachable_start), min(end, reachable_end)))
+
     gaps: list[list[int]] = []
-    gap_start: int | None = None
-    for value in range(count, count * sides + 1):
-        if value not in covered and gap_start is None:
-            gap_start = value
-        elif value in covered and gap_start is not None:
-            gaps.append([gap_start, value - 1])
-            gap_start = None
-    if gap_start is not None:
-        gaps.append([gap_start, count * sides])
+    cursor = reachable_start
+    for start, end in sorted(intervals):
+        if start > cursor:
+            gaps.append([cursor, start - 1])
+        cursor = max(cursor, end + 1)
+        if cursor > reachable_end:
+            break
+    if cursor <= reachable_end:
+        gaps.append([cursor, reachable_end])
     return gaps
 
 
 def _dice_distribution(count: int, sides: int) -> dict[int, int]:
-    distribution: dict[int, int] = {}
-    for rolls in itertools.product(range(1, sides + 1), repeat=count):
-        total = sum(rolls)
-        distribution[total] = distribution.get(total, 0) + 1
+    distribution = {0: 1}
+    for die_number in range(1, count + 1):
+        next_distribution: dict[int, int] = {}
+        window = 0
+        for total in range(die_number, die_number * sides + 1):
+            window += distribution.get(total - 1, 0)
+            window -= distribution.get(total - sides - 1, 0)
+            next_distribution[total] = window
+        distribution = next_distribution
     return distribution
+
+
+def _compute_odds_preview(
+    prepared: _OddsPreviewInput,
+) -> dict[str, pydantic.JsonValue]:
+    """Compute exact odds from detached, condition-filtered input."""
+    if prepared.mode == "weighted":
+        total_weight = sum(float(row.weight) for row in prepared.rows)
+        return OddsPreview(
+            source_id=prepared.source_id,
+            mode="weighted",
+            total_weight=total_weight,
+            rows=[
+                OddsPreviewRow(
+                    id=row.id,
+                    label=row.label,
+                    weight=row.weight,
+                    probability=(
+                        float(row.weight) / total_weight if total_weight else 0
+                    ),
+                )
+                for row in prepared.rows
+            ],
+            inactive_rows=prepared.inactive_rows,
+        ).model_dump(mode="json", exclude_none=True)
+
+    count, sides = parse_dice(prepared.dice)
+    distribution = _dice_distribution(count, sides)
+    total_outcomes = sum(distribution.values())
+    return OddsPreview(
+        source_id=prepared.source_id,
+        mode="dice",
+        dice=prepared.dice,
+        gaps=_range_gaps(prepared.rows, count, sides),
+        rows=[
+            OddsPreviewRow(
+                id=row.id,
+                label=row.label,
+                range=row.range,
+                outcomes=_row_outcome_count(row, distribution),
+                probability=_row_outcome_count(row, distribution) / total_outcomes,
+            )
+            for row in prepared.rows
+        ],
+        inactive_rows=prepared.inactive_rows,
+    ).model_dump(mode="json", exclude_none=True)
 
 
 def _roll_die(

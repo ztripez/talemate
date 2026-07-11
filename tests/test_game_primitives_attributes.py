@@ -91,7 +91,10 @@ def test_meter_attribute_resolution_and_summary_rendering():
     """Meter-backed summary attributes avoid raw numeric prompt dumps."""
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
-    store.set_primitive("character:Model/meters/confidence", {"value": 2})
+    store.set_primitive(
+        "character:Model/meters/confidence",
+        {"id": "confidence", "value": 2, "min": 0, "max": 5},
+    )
     resolver = AttributeResolver()
     resolver.set(
         scene,
@@ -279,7 +282,9 @@ def test_clock_modifier_and_state_ref_attribute_sources():
     scene = Scene()
     scene.game_state.variables["story"] = {"phase": "warmup"}
     store = PrimitiveStore.for_scene(scene)
-    store.set_primitive("scene:main/clocks/warmup", {"value": 3})
+    store.set_primitive(
+        "scene:main/clocks/warmup", {"id": "warmup", "value": 3, "max": 4}
+    )
     store.set_definition(
         "modifiers",
         "confidence_bonus",

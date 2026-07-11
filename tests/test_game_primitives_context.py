@@ -78,7 +78,10 @@ def test_hidden_prompt_and_summary_attribute_rendering():
     scene = Scene()
     resolver = AttributeResolver()
     store = PrimitiveStore.for_scene(scene)
-    store.set_primitive("scene:main/meters/danger", {"value": 2})
+    store.set_primitive(
+        "scene:main/meters/danger",
+        {"id": "danger", "value": 2, "min": 0, "max": 5},
+    )
     resolver.set(
         scene,
         "scene:main/attributes/secret",
@@ -106,6 +109,84 @@ def test_hidden_prompt_and_summary_attribute_rendering():
     assert "classified" not in result.content
     assert "danger = 2" not in result.content
     assert "Scene context:" in result.content
+
+
+def test_render_root_validation_count_is_independent_of_attribute_count(monkeypatch):
+    """Each render coerces the whole root once regardless of attribute count."""
+    scenes = [Scene(), Scene()]
+    resolver = AttributeResolver()
+    for index, attribute_count in enumerate((1, 24)):
+        for attribute_index in range(attribute_count):
+            resolver.set(
+                scenes[index],
+                f"scene:main/attributes/value_{attribute_index}",
+                {
+                    "source": "literal",
+                    "render_policy": "prompt",
+                    "value": attribute_index,
+                },
+            )
+
+    original_coerce = PrimitiveStore._coerce_root_model
+    calls = 0
+
+    def counted_coerce(value):
+        nonlocal calls
+        calls += 1
+        return original_coerce(value)
+
+    monkeypatch.setattr(
+        PrimitiveStore, "_coerce_root_model", staticmethod(counted_coerce)
+    )
+
+    small_result = PrimitiveContextRenderer().render_relevant_context(scenes[0])
+    assert "Value 0: 0" in small_result.content
+    assert calls == 1
+
+    large_result = PrimitiveContextRenderer().render_relevant_context(scenes[1])
+    assert "Value 23: 23" in large_result.content
+    assert calls == 2
+
+
+def test_active_story_scene_local_anchors_are_relevant_to_prompt_audiences():
+    """Active local anchors contribute context outside the creator audience."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_definition(
+        "adventures",
+        "demo",
+        {
+            "id": "demo",
+            "title": "Demo",
+            "start_scene": "opening",
+            "scenes": {
+                "opening": {
+                    "id": "opening",
+                    "title": "Opening",
+                    "local_anchors": ["object:Lantern"],
+                }
+            },
+        },
+    )
+    AttributeResolver().set(
+        scene,
+        "object:Lantern/attributes/flame",
+        {"source": "literal", "render_policy": "prompt", "value": "Flickering"},
+    )
+    AdventureEngine().activate(scene, "demo")
+
+    narrator = PrimitiveContextRenderer().render_relevant_context(
+        scene, audience="narrator", include_debug=True
+    )
+    creator = PrimitiveContextRenderer().render_relevant_context(
+        scene, audience="creator", include_debug=True
+    )
+
+    assert "Flame: Flickering" in narrator.content
+    assert "object:Lantern" in narrator.debug.candidate_anchors
+    assert "object:Lantern" in narrator.anchors
+    assert "object:Lantern" not in creator.debug.candidate_anchors
+    assert "Flickering" not in creator.content
 
 
 def test_conversation_relationship_is_directional_and_relevant():

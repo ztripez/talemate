@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
-import pydantic
 import pytest
 from _node_test_helpers import run_node
 
 import talemate.game.engine.nodes.load_definitions  # noqa: F401
 from talemate.context import ActiveScene
 from talemate.game.engine.nodes.registry import get_node
-from talemate.game.primitives.decks import DeckEngine, _definition_from_instance
+from talemate.game.primitives.decks import DeckEngine
+from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
@@ -48,6 +49,7 @@ def test_sample_mode_does_not_deplete_cards():
 
     assert first.result_id == "a"
     assert second.result_id == "a"
+    assert state["definition"] == "sample-deck"
     assert state["runtime"]["draw_pile"] == []
     assert state["runtime"]["discard"] == []
 
@@ -312,9 +314,48 @@ def test_persisted_runtime_state_continues_across_engine_instances():
     assert ledger[-1]["output"]["card_id"] == "b"
 
 
-def test_instance_definition_ingestion_supports_all_persisted_payload_schemas():
-    """Canonical, direct, and legacy payloads resolve through one schema boundary."""
-    store = PrimitiveStore.for_scene(Scene())
+def test_failed_deck_effects_leave_primitive_state_unchanged():
+    """A failed effect batch rolls back deck runtime, effects, and ledger entries."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    deck = {
+        "id": "atomic-deck",
+        "name": "Atomic Deck",
+        "mode": "physical",
+        "cards": [
+            {
+                "id": "only",
+                "label": "Only",
+                "effects": [
+                    {
+                        "op": "set",
+                        "target": "scene:main/flags/applied",
+                        "value": True,
+                    },
+                    {
+                        "op": "inc",
+                        "target": "scene:main/flags/non-numeric",
+                    },
+                ],
+            }
+        ],
+    }
+    DeckEngine().reset(scene, deck)
+    store.set_runtime_primitive(
+        "scene:main/flags/non-numeric", {"value": "not a number"}
+    )
+    root_before = copy.deepcopy(store.root)
+
+    with pytest.raises(PrimitiveError, match="Deck effects failed"):
+        DeckEngine().draw(scene, deck, options={"apply_effects": True})
+
+    assert store.root == root_before
+
+
+def test_primitive_reference_reads_canonical_instance_payload():
+    """Primitive references resolve definitions through canonical instance state."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
     definition = {
         "id": "weather",
         "name": "Weather",
@@ -322,31 +363,28 @@ def test_instance_definition_ingestion_supports_all_persisted_payload_schemas():
         "cards": [{"id": "sun", "label": "Sunny"}],
     }
     store.set_definition("decks", "weather", definition)
-    runtime = {"definition_id": "weather", "mode": "bag"}
+    store.set_runtime_primitive(
+        "scene:main/decks/weather",
+        {
+            "definition": "weather",
+            "runtime": {"definition_id": "weather", "mode": "bag"},
+        },
+    )
 
-    resolved = [
-        _definition_from_instance(store, {"definition": "weather", "runtime": runtime}),
-        _definition_from_instance(store, definition),
-        _definition_from_instance(store, {"value": definition}),
-    ]
+    state = DeckEngine().peek(scene, "scene:main/decks/weather")
 
-    assert [deck.id for deck in resolved] == ["weather", "weather", "weather"]
+    assert state["source_id"] == "weather"
+    assert state["runtime"]["definition_id"] == "weather"
 
 
 @pytest.mark.parametrize(
     "payload",
     [
         {
-            "definition": "weather",
-            "runtime": {"definition_id": "weather", "mode": "bag"},
-            "unknown": True,
-        },
-        {
             "id": "weather",
             "name": "Weather",
             "mode": "bag",
             "cards": [{"id": "sun", "label": "Sunny"}],
-            "unknown": True,
         },
         {
             "value": {
@@ -355,17 +393,84 @@ def test_instance_definition_ingestion_supports_all_persisted_payload_schemas():
                 "mode": "bag",
                 "cards": [{"id": "sun", "label": "Sunny"}],
             },
-            "unknown": True,
         },
     ],
-    ids=["instance", "definition", "legacy-value"],
+    ids=["direct-definition", "legacy-value"],
 )
-def test_instance_definition_ingestion_rejects_unknown_fields(payload):
-    """Every supported persisted payload shape rejects unknown top-level fields."""
-    store = PrimitiveStore.for_scene(Scene())
+def test_primitive_reference_rejects_noncanonical_persisted_payloads(payload):
+    """Persisted deck instances accept only the canonical instance schema."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_runtime_primitive("scene:main/decks/weather", payload)
 
-    with pytest.raises(pydantic.ValidationError, match="extra_forbidden"):
-        _definition_from_instance(store, payload)
+    with pytest.raises(PrimitiveError, match="Invalid persisted deck instance"):
+        DeckEngine().peek(scene, "scene:main/decks/weather")
+
+
+def test_stale_runtime_definition_id_fails_without_mutating_state():
+    """Canonical state for an old definition fails against resolved public input."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_definition(
+        "decks",
+        "weather",
+        {
+            "id": "weather",
+            "name": "Weather",
+            "mode": "bag",
+            "cards": [{"id": "sun", "label": "Sunny"}],
+        },
+    )
+    store.set_runtime_primitive(
+        "scene:main/decks/weather",
+        {
+            "definition": "old-weather",
+            "runtime": {"definition_id": "old-weather", "mode": "bag"},
+        },
+    )
+    before = copy.deepcopy(store.root)
+
+    with pytest.raises(PrimitiveError, match="definition_id.*old-weather"):
+        DeckEngine().draw(scene, "weather")
+
+    assert store.root == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("draw_pile", ["removed-card"]),
+        ("discard", ["removed-card"]),
+        ("recent", ["removed-card"]),
+        ("cooldowns", {"removed-card": 1}),
+        ("exhausted", ["removed-card"]),
+    ],
+)
+def test_stale_runtime_card_ids_fail_clearly_without_mutating_state(field, value):
+    """Every runtime card reference is checked against the current definition."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_definition(
+        "decks",
+        "weather",
+        {
+            "id": "weather",
+            "name": "Weather",
+            "mode": "bag",
+            "cards": [{"id": "sun", "label": "Sunny"}],
+        },
+    )
+    runtime = {"definition_id": "weather", "mode": "bag", field: value}
+    store.set_runtime_primitive(
+        "scene:main/decks/weather",
+        {"definition": "weather", "runtime": runtime},
+    )
+    before = copy.deepcopy(store.root)
+
+    with pytest.raises(PrimitiveError, match="unknown card IDs.*removed-card"):
+        DeckEngine().draw(scene, "scene:main/decks/weather")
+
+    assert store.root == before
 
 
 async def test_deck_draw_node_returns_json_serializable_output():

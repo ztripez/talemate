@@ -293,7 +293,7 @@ async def test_reinitialize_package_restores_prior_nodes_on_persistence_failure(
     async def fail_save(scene, scene_package_info):
         raise OSError("simulated persistence failure")
 
-    monkeypatch.setattr(packaging_module, "save_scene_package_info", fail_save)
+    monkeypatch.setattr(packaging_module, "_save_scene_package_info", fail_save)
     with pytest.raises(PackageInitializationError, match="persistence failure"):
         await initialize_package(scene, scene_loop, installed)
 

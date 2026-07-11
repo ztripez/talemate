@@ -138,11 +138,17 @@ def test_transition_availability_reads_primitive_clock_state():
         }
     ]
     store.set_definition("adventures", "demo", definition)
-    store.set_primitive("story_scene:arrival/clocks/ready", {"value": 1, "target": 2})
+    store.set_primitive(
+        "story_scene:arrival/clocks/ready",
+        {"id": "ready", "value": 1, "max": 2},
+    )
     engine = AdventureEngine()
 
     assert engine.can_take_transition(scene, "begin").available is False
-    store.set_primitive("story_scene:arrival/clocks/ready", {"value": 2, "target": 2})
+    store.set_primitive(
+        "story_scene:arrival/clocks/ready",
+        {"id": "ready", "value": 2, "max": 2},
+    )
     assert engine.can_take_transition(scene, "begin").available is True
 
 

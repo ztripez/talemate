@@ -1,5 +1,7 @@
 """Node wrappers for Game Primitives roll tables."""
 
+import asyncio
+
 from talemate.context import active_scene
 from talemate.game.engine.nodes.core import UNRESOLVED, GraphState, Node
 from talemate.game.engine.nodes.registry import register
@@ -7,6 +9,7 @@ from talemate.game.primitives.roll_tables import (
     RollTableEngine,
     RollTablePreviewRequest,
     RollTableRollRequest,
+    _compute_odds_preview,
 )
 
 __all__ = ["PreviewOdds", "Roll"]
@@ -90,9 +93,10 @@ class PreviewOdds(Node):
                 "anchor": self.normalized_input_value("anchor"),
             }
         )
-        odds = RollTableEngine().preview_odds(
+        prepared = RollTableEngine()._prepare_odds_preview(
             scene,
             request.table,
             anchor=request.anchor,
         )
+        odds = await asyncio.to_thread(_compute_odds_preview, prepared)
         self.set_output_values({"odds": odds})

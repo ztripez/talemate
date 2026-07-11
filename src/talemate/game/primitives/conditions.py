@@ -8,7 +8,8 @@ from typing import Any, Literal
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
-from talemate.game.primitives.store import PrimitiveStore
+from talemate.game.primitives.definitions import ClockPayload
+from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 from talemate.game.primitives.values import primitive_payload_value
 from talemate.game.schema import (
     ConditionOperator,
@@ -199,13 +200,19 @@ def evaluate_condition_input(
     ]
 
 
-def conditions_match(scene: Any, groups: list[PrimitiveConditionGroup]) -> bool:
+def conditions_match(
+    scene: Any,
+    groups: list[PrimitiveConditionGroup],
+    *,
+    store: PrimitiveStoreReader | None = None,
+) -> bool:
     """Return whether primitive condition groups permit an operation.
 
     Args:
         scene: Talemate scene or scene-like object read by condition evaluation.
         groups: Primitive condition groups to evaluate. An empty list means the
             operation is unconditional and therefore matches.
+        store: Optional already validated primitive store.
 
     Returns:
         ``True`` when no groups are provided or at least one condition group
@@ -217,14 +224,15 @@ def conditions_match(scene: Any, groups: list[PrimitiveConditionGroup]) -> bool:
     """
     if not groups:
         return True
-    store = PrimitiveStore.for_scene(scene) if _groups_require_store(groups) else None
+    if store is None and _groups_require_store(groups):
+        store = PrimitiveStore.for_scene(scene)
     return any(
         evaluate_condition_group(scene, store, group).matches for group in groups
     )
 
 
 def evaluate_condition_group(
-    scene: Any, store: PrimitiveStore | None, group: PrimitiveConditionGroup
+    scene: Any, store: PrimitiveStoreReader | None, group: PrimitiveConditionGroup
 ) -> PrimitiveConditionGroupResult:
     """Evaluate one primitive condition group.
 
@@ -258,7 +266,9 @@ def evaluate_condition_group(
 
 
 def evaluate_condition(
-    scene: Any, store: PrimitiveStore | None, condition: PrimitiveCondition | dict
+    scene: Any,
+    store: PrimitiveStoreReader | None,
+    condition: PrimitiveCondition | dict,
 ) -> PrimitiveConditionResult:
     """Evaluate one primitive-aware condition without mutating state.
 
@@ -371,7 +381,7 @@ def _normalize_condition_groups(
 
 
 def _evaluate_anchor_tag(
-    store: PrimitiveStore, cond: PrimitiveCondition
+    store: PrimitiveStoreReader, cond: PrimitiveCondition
 ) -> PrimitiveConditionResult:
     """Evaluate anchor tag membership conditions."""
     anchor = AnchorRef.parse(cond.anchor)
@@ -400,7 +410,7 @@ def _evaluate_anchor_tag(
 
 
 def _condition_value(
-    scene: Any, store: PrimitiveStore | None, cond: PrimitiveCondition
+    scene: Any, store: PrimitiveStoreReader | None, cond: PrimitiveCondition
 ) -> tuple[Any, str | None]:
     """Resolve the current value for a condition."""
     if cond.kind == "path":
@@ -434,7 +444,7 @@ def _condition_value(
             else _anchored_ref(cond.anchor, "clocks", cond.dimension)
         )
         payload = store.get_primitive(ref)
-        return _clock_complete(payload), ref.key()
+        return _clock_complete(payload, ref.id), ref.key()
     raise ValueError(f"Unknown condition kind: {cond.kind}")
 
 
@@ -454,16 +464,11 @@ def _require_text(value: str | None, message: str) -> str:
     return value
 
 
-def _clock_complete(payload: Any) -> bool:
+def _clock_complete(payload: Any, clock_id: str) -> bool:
     """Return whether a clock payload is complete."""
-    if not isinstance(payload, dict):
+    if payload is None:
         return False
-    if payload.get("complete") is True:
-        return True
-    value = payload.get("value")
-    target = payload.get("target")
-    return (
-        isinstance(value, (int, float))
-        and isinstance(target, (int, float))
-        and value >= target
-    )
+    clock = ClockPayload.model_validate(payload)
+    if clock.id != clock_id:
+        raise ValueError(f"Clock key '{clock_id}' must match id '{clock.id}'")
+    return clock.value == clock.max

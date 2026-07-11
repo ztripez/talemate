@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
-from talemate.game.primitives.definitions import coerce_definition_payload
+from talemate.game.primitives.definitions import (
+    ClockPayload,
+    MeterPayload,
+    coerce_definition_payload,
+)
 from talemate.game.primitives.exceptions import PrimitiveStoreError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.schema import (
@@ -17,11 +21,35 @@ from talemate.game.primitives.schema import (
     AnchorPayload,
     PrimitivePayload,
     PrimitiveRootPayload,
+    RollTableInstancePayload,
     default_anchor,
+    default_root,
 )
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
+
+
+class PrimitiveStoreReader(Protocol):
+    """Read-only interface shared by mutable stores and validated snapshots."""
+
+    def get_anchor(self, anchor: AnchorRef | str, create: bool = False) -> dict | None:
+        """Return a detached anchor payload when present."""
+
+    def get_primitive(self, ref: PrimitiveRef | str, default: Any = None) -> Any:
+        """Return a detached primitive payload when present."""
+
+    def get_definition(self, kind: str, definition_id: str, default: Any = None) -> Any:
+        """Return a detached definition payload when present."""
+
+    def get_runtime(self, key: str, default: Any = None) -> Any:
+        """Return a detached runtime value when present."""
+
+    def iter_anchor_keys(self, kind: str | None = None) -> list[str]:
+        """Return canonical persisted anchor keys."""
+
+    def iter_primitives(self, anchor: AnchorRef | str, kind: str) -> dict[str, Any]:
+        """Return a detached primitive collection."""
 
 
 class PrimitiveStore:
@@ -73,12 +101,27 @@ class PrimitiveStore:
         cls._validate_ledger_limit(max_ledger_length)
         variables = scene.game_state.variables
         if GAME_PRIMITIVES_KEY not in variables:
-            root = {}
+            root = default_root()
             variables[GAME_PRIMITIVES_KEY] = root
         else:
             root = variables[GAME_PRIMITIVES_KEY]
 
         return cls(root, max_ledger_length=max_ledger_length)
+
+    @classmethod
+    def read_snapshot_for_scene(cls, scene: "Scene") -> "PrimitiveStoreSnapshot":
+        """Validate scene primitive state once and return a detached read snapshot.
+
+        Unlike a mutable store, the snapshot never revalidates the whole root for
+        individual reads and exposes no mutable root reference.
+        """
+        variables = scene.game_state.variables
+        root = (
+            variables[GAME_PRIMITIVES_KEY]
+            if GAME_PRIMITIVES_KEY in variables
+            else default_root()
+        )
+        return PrimitiveStoreSnapshot(cls._coerce_root_model(root))
 
     @property
     def root(self) -> dict[str, Any]:
@@ -260,6 +303,11 @@ class PrimitiveStore:
             return default
         return copy.deepcopy(definitions[kind][definition_id])
 
+    def get_runtime(self, key: str, default: Any = None) -> Any:
+        """Return a detached value from the validated runtime mapping."""
+        self.ensure_shape()
+        return copy.deepcopy(self.root["runtime"].get(key, default))
+
     def set_definition(self, kind: str, definition_id: str, value: dict) -> None:
         """Persist a primitive definition payload by kind and id.
 
@@ -359,10 +407,9 @@ class PrimitiveStore:
         self, ref: PrimitiveRef | str, value: dict, *, ledger_op: str | None
     ) -> None:
         """Persist a primitive payload with optional ledger recording."""
-        payload = self._coerce_primitive_payload(value)
-        self._validate_ledger_limit(self.max_ledger_length)
-
         primitive_ref = self._coerce_primitive(ref)
+        payload = self._coerce_primitive_payload(primitive_ref, value)
+        self._validate_ledger_limit(self.max_ledger_length)
         anchor_payload = self._get_anchor_payload(primitive_ref.anchor, create=False)
         primitive_kind = None
         if anchor_payload is not None:
@@ -481,10 +528,16 @@ class PrimitiveStore:
         self.root.clear()
         self.root.update(payload)
 
-    def _coerce_root_payload(self, value: Any) -> dict[str, Any]:
+    @staticmethod
+    def _coerce_root_payload(value: Any) -> dict[str, Any]:
         """Validate and serialize a primitive root payload."""
+        return PrimitiveStore._coerce_root_model(value).model_dump(mode="json")
+
+    @staticmethod
+    def _coerce_root_model(value: Any) -> PrimitiveRootPayload:
+        """Validate and return a primitive root model."""
         try:
-            return PrimitiveRootPayload.model_validate(value).model_dump(mode="json")
+            return PrimitiveRootPayload.model_validate(value)
         except pydantic.ValidationError as exc:
             raise PrimitiveStoreError(f"Invalid Game Primitives root: {exc}") from exc
 
@@ -536,11 +589,26 @@ class PrimitiveStore:
             primitives[kind] = {}
         return primitives[kind]
 
-    def _coerce_primitive_payload(self, value: Any) -> dict[str, Any]:
+    def _coerce_primitive_payload(
+        self, ref: PrimitiveRef, value: Any
+    ) -> dict[str, Any]:
         """Validate a primitive payload as a JSON-compatible object."""
         try:
+            model_type = {
+                "meters": MeterPayload,
+                "clocks": ClockPayload,
+                "roll_tables": RollTableInstancePayload,
+            }.get(ref.kind)
+            if model_type is not None:
+                model = model_type.model_validate(value)
+                if ref.kind in {"meters", "clocks"} and model.id != ref.id:
+                    label = ref.kind.removesuffix("s").capitalize()
+                    raise ValueError(
+                        f"{label} key '{ref.id}' must match id '{model.id}'"
+                    )
+                return model.model_dump(mode="json")
             return PrimitivePayload.model_validate(value).model_dump(mode="json")
-        except pydantic.ValidationError as exc:
+        except (pydantic.ValidationError, ValueError) as exc:
             raise PrimitiveStoreError(f"Invalid primitive payload: {exc}") from exc
 
     def _coerce_definition_payload(
@@ -599,3 +667,66 @@ class PrimitiveStore:
         except (KeyError, pydantic.ValidationError, TypeError) as exc:
             raise PrimitiveStoreError(f"Invalid primitive ledger: {exc}") from exc
         return [entry.model_dump(mode="json") for entry in ledger_entries]
+
+
+class PrimitiveStoreSnapshot:
+    """Detached, validated primitive state for repeated read-only operations."""
+
+    def __init__(self, validated_root: PrimitiveRootPayload):
+        """Create detached storage from an explicitly validated root model."""
+        if not isinstance(validated_root, PrimitiveRootPayload):
+            raise TypeError("PrimitiveStoreSnapshot requires PrimitiveRootPayload")
+        self.__root = validated_root.model_dump(mode="json")
+
+    def get_anchor(self, anchor: AnchorRef | str, create: bool = False) -> dict | None:
+        """Return a detached anchor payload without revalidating the root."""
+        if create:
+            raise PrimitiveStoreError("PrimitiveStoreSnapshot is read-only")
+        anchor_ref = (
+            anchor if isinstance(anchor, AnchorRef) else AnchorRef.parse(anchor)
+        )
+        payload = self.__root["anchors"].get(anchor_ref.key())
+        return copy.deepcopy(payload) if payload is not None else None
+
+    def get_primitive(self, ref: PrimitiveRef | str, default: Any = None) -> Any:
+        """Return a detached primitive payload without revalidating the root."""
+        primitive_ref = (
+            ref if isinstance(ref, PrimitiveRef) else PrimitiveRef.parse(ref)
+        )
+        anchor = self.__root["anchors"].get(primitive_ref.anchor.key())
+        if anchor is None:
+            return default
+        payload = (
+            anchor["primitives"]
+            .get(primitive_ref.kind, {})
+            .get(primitive_ref.id, default)
+        )
+        return copy.deepcopy(payload)
+
+    def get_definition(self, kind: str, definition_id: str, default: Any = None) -> Any:
+        """Return a detached definition payload without revalidating the root."""
+        payload = self.__root["definitions"].get(kind, {}).get(definition_id, default)
+        return copy.deepcopy(payload)
+
+    def get_runtime(self, key: str, default: Any = None) -> Any:
+        """Return a detached runtime value without revalidating the root."""
+        return copy.deepcopy(self.__root["runtime"].get(key, default))
+
+    def iter_anchor_keys(self, kind: str | None = None) -> list[str]:
+        """Return canonical anchor keys without revalidating the root."""
+        keys = []
+        for key in self.__root["anchors"]:
+            anchor = AnchorRef.parse(key)
+            if kind is None or anchor.kind == kind:
+                keys.append(anchor.key())
+        return keys
+
+    def iter_primitives(self, anchor: AnchorRef | str, kind: str) -> dict[str, Any]:
+        """Return a detached primitive collection without revalidating the root."""
+        anchor_ref = (
+            anchor if isinstance(anchor, AnchorRef) else AnchorRef.parse(anchor)
+        )
+        payload = self.__root["anchors"].get(anchor_ref.key())
+        if payload is None:
+            return {}
+        return copy.deepcopy(payload["primitives"].get(kind, {}))

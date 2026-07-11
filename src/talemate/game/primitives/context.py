@@ -19,7 +19,7 @@ from talemate.game.primitives.attributes import AttributeResolver
 from talemate.game.primitives.adventure import AdventureEngine
 from talemate.game.primitives.relationships import RelationshipGraph
 from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
-from talemate.game.primitives.store import PrimitiveStore
+from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
@@ -154,7 +154,7 @@ class PrimitiveContextRenderer:
         if GAME_PRIMITIVES_KEY not in scene.game_state.variables:
             return PrimitiveRenderedContext(content="")
 
-        store = PrimitiveStore.for_scene(scene)
+        store = PrimitiveStore.read_snapshot_for_scene(scene)
         available = set(store.iter_anchor_keys())
         candidates = self._relevant_anchors(scene, request, available)
         sections: list[str] = []
@@ -163,8 +163,12 @@ class PrimitiveContextRenderer:
         skipped_sources: list[str] = []
 
         if request.audience != "creator":
+            current_story_scene = AdventureEngine().get_current(scene, store=store)
+            if current_story_scene is not None:
+                for anchor_key in current_story_scene.local_anchors:
+                    _append_unique(candidates, anchor_key)
             adventure_context, story_scene_anchor = (
-                AdventureEngine().render_current_context_with_anchor(scene)
+                AdventureEngine().render_current_context_with_anchor(scene, store=store)
             )
             if adventure_context and story_scene_anchor is not None:
                 sections.append(adventure_context)
@@ -213,7 +217,7 @@ class PrimitiveContextRenderer:
         return anchors
 
     def _render_anchor(
-        self, scene: "Scene", store: PrimitiveStore, anchor_key: str
+        self, scene: "Scene", store: PrimitiveStoreReader, anchor_key: str
     ) -> tuple[list[str], list[str], list[str]]:
         """Render safe attribute and relationship lines for one anchor."""
         lines: list[str] = []
@@ -223,11 +227,13 @@ class PrimitiveContextRenderer:
             ref = PrimitiveRef(
                 anchor=AnchorRef.parse(anchor_key), kind="attributes", id=attribute_id
             )
-            source = self.attribute_resolver.get(scene, ref)
+            source = self.attribute_resolver.get(scene, ref, store=store)
             if source.source not in _PROMPT_SAFE_ATTRIBUTE_SOURCES:
                 skipped.append(ref.key())
                 continue
-            rendered = self.attribute_resolver.render(scene, ref, audience="prompt")
+            rendered = self.attribute_resolver.render(
+                scene, ref, audience="prompt", store=store
+            )
             if rendered:
                 lines.append(rendered)
                 refs.append(ref.key())
@@ -235,7 +241,9 @@ class PrimitiveContextRenderer:
         anchor = AnchorRef.parse(anchor_key)
         if anchor.kind == "relationship":
             source, target = relationship_participants(anchor)
-            summary = self.relationship_graph.summary(scene, source, target)
+            summary = self.relationship_graph.summary(
+                scene, source, target, store=store
+            )
             if summary:
                 lines.append(summary)
         return lines, refs, skipped

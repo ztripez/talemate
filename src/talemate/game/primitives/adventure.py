@@ -16,7 +16,7 @@ from talemate.game.primitives.effects import Effect, EffectResult, apply_effects
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
-from talemate.game.primitives.store import PrimitiveStore
+from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 
 if TYPE_CHECKING:
     from talemate.scene_message import SceneMessage
@@ -227,27 +227,33 @@ class AdventureEngine:
         store.replace_validated_root(candidate_store.root)
         return state
 
-    def get_state(self, scene: "Scene") -> AdventureState | None:
+    def get_state(
+        self, scene: "Scene", *, store: PrimitiveStoreReader | None = None
+    ) -> AdventureState | None:
         """Return validated active adventure state without initializing storage."""
         if GAME_PRIMITIVES_KEY not in scene.game_state.variables:
             return None
-        store = PrimitiveStore.for_scene(scene)
-        payload = store.root["runtime"].get("adventure")
+        store = store or PrimitiveStore.for_scene(scene)
+        payload = store.get_runtime("adventure")
         return AdventureState.model_validate(payload) if payload is not None else None
 
-    def get_current(self, scene: "Scene") -> StorySceneDefinition | None:
+    def get_current(
+        self, scene: "Scene", *, store: PrimitiveStoreReader | None = None
+    ) -> StorySceneDefinition | None:
         """Return the active story-scene definition, or ``None`` when inactive."""
-        loaded = self._load(scene)
+        loaded = self._load(scene, store=store)
         return loaded[1].scenes[loaded[2].current_story_scene] if loaded else None
 
-    def list_transitions(self, scene: "Scene") -> list[TransitionAvailability]:
+    def list_transitions(
+        self, scene: "Scene", *, store: PrimitiveStoreReader | None = None
+    ) -> list[TransitionAvailability]:
         """Return deterministic availability for outgoing transitions."""
-        loaded = self._load(scene)
+        loaded = self._load(scene, store=store)
         if loaded is None:
             return []
         _, definition, state = loaded
         return [
-            self._availability(scene, transition)
+            self._availability(scene, transition, store=loaded[0])
             for transition in definition.transitions.values()
             if transition.from_scene == state.current_story_scene
         ]
@@ -402,10 +408,14 @@ class AdventureEngine:
         return self.render_current_context_with_anchor(scene, audience=audience)[0]
 
     def render_current_context_with_anchor(
-        self, scene: "Scene", audience: Literal["prompt", "summary"] = "prompt"
+        self,
+        scene: "Scene",
+        audience: Literal["prompt", "summary"] = "prompt",
+        *,
+        store: PrimitiveStoreReader | None = None,
     ) -> tuple[str, str | None]:
         """Render current context and return its canonical contributing anchor."""
-        loaded = self._load(scene)
+        loaded = self._load(scene, store=store)
         if loaded is None:
             return "", None
         _, definition, state = loaded
@@ -426,7 +436,7 @@ class AdventureEngine:
             lines.extend(
                 ["Scene purpose:", *[f"- {goal}" for goal in story_scene.goals]]
             )
-        transitions = self.list_transitions(scene)
+        transitions = self.list_transitions(scene, store=loaded[0])
         if transitions:
             lines.append("Available transitions:")
             for transition in transitions:
@@ -435,13 +445,13 @@ class AdventureEngine:
         return "\n".join(lines), story_scene_anchor(story_scene.id).key()
 
     def _load(
-        self, scene: "Scene"
-    ) -> tuple[PrimitiveStore, AdventureDefinition, AdventureState] | None:
+        self, scene: "Scene", *, store: PrimitiveStoreReader | None = None
+    ) -> tuple[PrimitiveStoreReader, AdventureDefinition, AdventureState] | None:
         """Load and cross-check active runtime state and its definition."""
-        state = self.get_state(scene)
+        state = self.get_state(scene, store=store)
         if state is None:
             return None
-        store = PrimitiveStore.for_scene(scene)
+        store = store or PrimitiveStore.for_scene(scene)
         definition = self._definition(store, state.adventure_id)
         if state.current_story_scene not in definition.scenes:
             raise PrimitiveError(
@@ -450,7 +460,9 @@ class AdventureEngine:
         return store, definition, state
 
     @staticmethod
-    def _definition(store: PrimitiveStore, adventure_id: str) -> AdventureDefinition:
+    def _definition(
+        store: PrimitiveStoreReader, adventure_id: str
+    ) -> AdventureDefinition:
         """Load one required adventure definition from the primitive store."""
         payload = store.get_definition("adventures", adventure_id)
         if payload is None:
@@ -461,10 +473,13 @@ class AdventureEngine:
 
     @staticmethod
     def _availability(
-        scene: "Scene", transition: TransitionDefinition
+        scene: "Scene",
+        transition: TransitionDefinition,
+        *,
+        store: PrimitiveStoreReader | None = None,
     ) -> TransitionAvailability:
         """Evaluate transition conditions without exposing their internals."""
-        available = conditions_match(scene, transition.conditions)
+        available = conditions_match(scene, transition.conditions, store=store)
         return TransitionAvailability(
             id=transition.id,
             label=transition.label,

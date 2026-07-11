@@ -7,7 +7,11 @@ from typing import Any, Literal
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
-from talemate.game.primitives.definitions import PrimitiveDefinitions
+from talemate.game.primitives.definitions import (
+    ClockPayload,
+    MeterPayload,
+    PrimitiveDefinitions,
+)
 from talemate.game.primitives.ledger import LedgerEntry
 
 #: Key in ``Scene.game_state.variables`` that stores the primitive root payload.
@@ -50,6 +54,29 @@ class PrimitivePayload(pydantic.RootModel[dict[str, pydantic.JsonValue]]):
     model_config = pydantic.ConfigDict(
         allow_inf_nan=False, revalidate_instances="always"
     )
+
+
+class RollTableInstancePayload(pydantic.BaseModel):
+    """Validated persisted payload for one anchored roll-table instance.
+
+    Attributes:
+        definition: Canonical reusable roll-table definition id.
+    """
+
+    model_config = pydantic.ConfigDict(
+        extra="forbid",
+        allow_inf_nan=False,
+        str_strip_whitespace=True,
+        revalidate_instances="always",
+    )
+
+    definition: str = pydantic.Field(min_length=1)
+
+    @pydantic.field_validator("definition")
+    @classmethod
+    def validate_definition_id(cls, value: str) -> str:
+        """Normalize and validate the referenced definition id."""
+        return PrimitiveRef.validate_path_segment(value)
 
 
 class AnchorPayload(pydantic.BaseModel):
@@ -129,6 +156,24 @@ class AnchorPayload(pydantic.BaseModel):
                         f"'{canonical_id}' in kind '{canonical_kind}': "
                         f"'{original_ids[canonical_id]}' and '{primitive_id}'"
                     )
+                if canonical_kind == "meters":
+                    model = MeterPayload.model_validate(payload)
+                    if model.id != canonical_id:
+                        raise ValueError(
+                            f"Meter key '{canonical_id}' must match id '{model.id}'"
+                        )
+                    payload = model.model_dump(mode="json")
+                elif canonical_kind == "clocks":
+                    model = ClockPayload.model_validate(payload)
+                    if model.id != canonical_id:
+                        raise ValueError(
+                            f"Clock key '{canonical_id}' must match id '{model.id}'"
+                        )
+                    payload = model.model_dump(mode="json")
+                elif canonical_kind == "roll_tables":
+                    payload = RollTableInstancePayload.model_validate(
+                        payload
+                    ).model_dump(mode="json")
                 normalized_map[canonical_id] = payload
                 original_ids[canonical_id] = primitive_id
             normalized[canonical_kind] = normalized_map
@@ -209,8 +254,12 @@ class PrimitiveDraft(pydantic.BaseModel):
         """
         self.id = PrimitiveRef.validate_path_segment(self.id)
         candidate = PrimitiveRootPayload(
+            version=CURRENT_VERSION,
             definitions=self.definitions,
             anchors=self.anchors,
+            runtime={},
+            ledger=[],
+            drafts={},
         )
         self.definitions = candidate.definitions
         self.anchors = candidate.anchors
@@ -241,14 +290,12 @@ class PrimitiveRootPayload(pydantic.BaseModel):
         extra="forbid", allow_inf_nan=False, revalidate_instances="always"
     )
 
-    version: pydantic.StrictInt = CURRENT_VERSION
-    definitions: PrimitiveDefinitions = pydantic.Field(
-        default_factory=PrimitiveDefinitions
-    )
-    anchors: dict[str, AnchorPayload] = pydantic.Field(default_factory=dict)
-    runtime: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-    ledger: list[LedgerEntry] = pydantic.Field(default_factory=list)
-    drafts: dict[str, PrimitiveDraft] = pydantic.Field(default_factory=dict)
+    version: pydantic.StrictInt
+    definitions: PrimitiveDefinitions
+    anchors: dict[str, AnchorPayload]
+    runtime: dict[str, pydantic.JsonValue]
+    ledger: list[LedgerEntry]
+    drafts: dict[str, PrimitiveDraft]
 
     @pydantic.field_validator("drafts")
     @classmethod
@@ -355,3 +402,15 @@ def default_anchor() -> dict[str, Any]:
 
     """
     return AnchorPayload().model_dump(mode="json")
+
+
+def default_root() -> dict[str, Any]:
+    """Create the complete current-version primitive root storage shape."""
+    return PrimitiveRootPayload(
+        version=CURRENT_VERSION,
+        definitions=PrimitiveDefinitions(),
+        anchors={},
+        runtime={},
+        ledger=[],
+        drafts={},
+    ).model_dump(mode="json")

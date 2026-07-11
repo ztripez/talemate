@@ -145,6 +145,30 @@ def test_validation_rejects_missing_modifier_target():
     assert "Missing modifier target: missing-table" in validation.errors
 
 
+def test_validation_rejects_dangling_anchored_roll_table_definition():
+    """Anchored roll-table instances must reference a candidate definition."""
+    scene = Scene()
+    service = PrimitiveAuthoringService()
+    service.create_draft(scene, "dangling-table")
+    service.create_anchor(
+        scene,
+        CreateAnchorRequest(draft_id="dangling-table", kind="scene", id="main"),
+    )
+    draft = service.drafts.get(scene, "dangling-table")
+    draft.anchors["scene:main"].primitives["roll_tables"] = {
+        "local": {"definition": "missing"}
+    }
+    service.drafts.put(scene, draft)
+
+    validation = service.validate_draft(scene, "dangling-table").validation
+
+    assert validation.ok is False
+    assert (
+        "Missing roll table definition for scene:main/roll_tables/local: missing"
+        in validation.errors
+    )
+
+
 def test_validation_traverses_attribute_and_modifier_condition_references():
     scene = Scene()
     service = PrimitiveAuthoringService()
@@ -291,6 +315,78 @@ def test_validation_traverses_deck_card_and_roll_table_row_conditions():
 
     assert "Missing meter primitive: scene:main/meters/card-missing" in errors
     assert "Missing clock primitive: scene:main/clocks/row-missing" in errors
+
+
+def test_validation_traverses_adventure_transition_condition_references():
+    scene = Scene()
+    service = PrimitiveAuthoringService()
+    service.create_draft(scene, "adventure-condition-refs")
+    draft = service.drafts.get(scene, "adventure-condition-refs")
+    draft.definitions["adventures"]["adventure"] = {
+        "id": "adventure",
+        "title": "Adventure",
+        "start_scene": "start",
+        "scenes": {
+            "start": {"id": "start", "title": "Start"},
+            "end": {"id": "end", "title": "End"},
+        },
+        "transitions": {
+            "continue": {
+                "id": "continue",
+                "from_scene": "start",
+                "to_scene": "end",
+                "label": "Continue",
+                "conditions": [
+                    {
+                        "conditions": [
+                            {
+                                "kind": "meter",
+                                "path": "scene:main/meters/missing-meter",
+                            },
+                            {
+                                "kind": "clock_complete",
+                                "path": "scene:main/clocks/missing-clock",
+                            },
+                            {
+                                "kind": "relationship",
+                                "anchor": "relationship:Alice->Bob",
+                                "dimension": "trust",
+                            },
+                            {
+                                "kind": "primitive",
+                                "path": "scene:main/attributes/missing-attribute",
+                            },
+                            {
+                                "kind": "anchor_has_tag",
+                                "anchor": "character:Missing",
+                                "tag": "active",
+                            },
+                        ]
+                    }
+                ],
+            }
+        },
+    }
+    service.drafts.put(scene, draft)
+
+    validation = service.validate_draft(scene, "adventure-condition-refs").validation
+
+    assert validation.ok is False
+    assert (
+        "Missing meter primitive: scene:main/meters/missing-meter" in validation.errors
+    )
+    assert (
+        "Missing clock primitive: scene:main/clocks/missing-clock" in validation.errors
+    )
+    assert (
+        "Missing meter primitive: relationship:Alice->Bob/meters/trust"
+        in validation.errors
+    )
+    assert (
+        "Missing attribute primitive: scene:main/attributes/missing-attribute"
+        in validation.errors
+    )
+    assert "Missing anchor for tag condition: character:Missing" in validation.errors
 
 
 def test_validation_warns_for_deck_avoid_recent_and_unrenderable_prompt_source():

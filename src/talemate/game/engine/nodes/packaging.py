@@ -4,8 +4,10 @@ Node packages declare graph modules that attach to a scene loop, expose configur
 properties, and track installed listener nodes in scene package metadata.
 """
 
+import asyncio
 import os
 import tempfile
+import weakref
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import pydantic
@@ -54,6 +56,9 @@ TYPE_CHOICES.extend(
 )
 
 SCENE_PACKAGE_INFO_FILENAME = "modules.json"
+_scene_package_locks: weakref.WeakKeyDictionary[object, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
 
 # ------------------------------------------------------------------------------------------------
 # MODELS
@@ -232,19 +237,10 @@ async def initialize_scene_package_info(scene: "Scene"):
         OSError: If the information directory or metadata file cannot be created.
     """
 
-    filepath = os.path.join(scene.info_dir, SCENE_PACKAGE_INFO_FILENAME)
-
-    # if info dir does not exist, create it
-    if not os.path.exists(scene.info_dir):
-        os.makedirs(scene.info_dir)
-
-    if not os.path.exists(filepath):
-        with open(filepath, "w") as f:
-            f.write(
-                ScenePackageInfo(packages=[]).model_dump_json(
-                    indent=4, exclude_computed_fields=True
-                )
-            )
+    async with _scene_package_lock(scene):
+        scene_package_info = await _read_scene_package_info(scene)
+        if scene_package_info is None:
+            await _save_scene_package_info(scene, ScenePackageInfo(packages=[]))
 
 
 async def get_scene_package_info(scene: "Scene") -> ScenePackageInfo:
@@ -263,17 +259,8 @@ async def get_scene_package_info(scene: "Scene") -> ScenePackageInfo:
         pydantic.ValidationError: If persisted metadata is invalid.
     """
 
-    filepath = os.path.join(scene.info_dir, SCENE_PACKAGE_INFO_FILENAME)
-
-    # if info dir does not exist, create it
-    if not os.path.exists(scene.info_dir):
-        os.makedirs(scene.info_dir)
-
-    if not os.path.exists(filepath):
-        return ScenePackageInfo(packages=[])
-
-    with open(filepath, "r") as f:
-        return ScenePackageInfo.model_validate_json(f.read())
+    scene_package_info = await _read_scene_package_info(scene)
+    return scene_package_info or ScenePackageInfo(packages=[])
 
 
 async def apply_scene_package_info(scene: "Scene", package_datas: list[PackageData]):
@@ -414,6 +401,58 @@ async def get_package_by_registry(package_registry: str) -> PackageData | None:
     return next((p for p in packages if p.registry == package_registry), None)
 
 
+def _scene_package_lock(scene: "Scene") -> asyncio.Lock:
+    lock = _scene_package_locks.get(scene)
+    if lock is None:
+        lock = asyncio.Lock()
+        _scene_package_locks[scene] = lock
+    return lock
+
+
+def _atomic_write_scene_package_info(info_dir: str, serialized: str) -> None:
+    os.makedirs(info_dir, exist_ok=True)
+    filepath = os.path.join(info_dir, SCENE_PACKAGE_INFO_FILENAME)
+    temporary_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", dir=info_dir, delete=False, encoding="utf-8"
+        ) as temporary_file:
+            temporary_path = temporary_file.name
+            temporary_file.write(serialized)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, filepath)
+    except Exception:
+        if temporary_path is not None and os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+        raise
+
+
+def _read_scene_package_info_sync(info_dir: str) -> ScenePackageInfo | None:
+    os.makedirs(info_dir, exist_ok=True)
+    filepath = os.path.join(info_dir, SCENE_PACKAGE_INFO_FILENAME)
+    try:
+        with open(filepath, encoding="utf-8") as package_file:
+            return ScenePackageInfo.model_validate_json(package_file.read())
+    except FileNotFoundError:
+        return None
+
+
+async def _read_scene_package_info(scene: "Scene") -> ScenePackageInfo | None:
+    return await asyncio.to_thread(_read_scene_package_info_sync, scene.info_dir)
+
+
+async def _save_scene_package_info(
+    scene: "Scene", scene_package_info: ScenePackageInfo
+) -> None:
+    serialized = scene_package_info.model_dump_json(
+        indent=4, exclude_computed_fields=True
+    )
+    await asyncio.to_thread(
+        _atomic_write_scene_package_info, scene.info_dir, serialized
+    )
+
+
 async def save_scene_package_info(scene: "Scene", scene_package_info: ScenePackageInfo):
     """Persist validated scene package metadata using atomic file replacement.
 
@@ -428,28 +467,8 @@ async def save_scene_package_info(scene: "Scene", scene_package_info: ScenePacka
         OSError: If temporary-file creation, synchronization, or replacement fails.
     """
 
-    # if info dir does not exist, create it
-    if not os.path.exists(scene.info_dir):
-        os.makedirs(scene.info_dir)
-
-    filepath = os.path.join(scene.info_dir, SCENE_PACKAGE_INFO_FILENAME)
-    serialized = scene_package_info.model_dump_json(
-        indent=4, exclude_computed_fields=True
-    )
-    temporary_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w", dir=scene.info_dir, delete=False, encoding="utf-8"
-        ) as temporary_file:
-            temporary_path = temporary_file.name
-            temporary_file.write(serialized)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.replace(temporary_path, filepath)
-    except Exception:
-        if temporary_path is not None and os.path.exists(temporary_path):
-            os.unlink(temporary_path)
-        raise
+    async with _scene_package_lock(scene):
+        await _save_scene_package_info(scene, scene_package_info)
 
 
 async def install_package(scene: "Scene", package_data: PackageData) -> PackageData:
@@ -467,17 +486,16 @@ async def install_package(scene: "Scene", package_data: PackageData) -> PackageD
         pydantic.ValidationError: If persisted metadata is invalid.
     """
 
-    scene_package_info = await get_scene_package_info(scene)
+    async with _scene_package_lock(scene):
+        scene_package_info = await get_scene_package_info(scene)
 
-    if scene_package_info.has_package(package_data.registry):
-        # already installed
-        return package_data
+        installed_package = scene_package_info.get_package(package_data.registry)
+        if installed_package is not None:
+            return installed_package
 
-    package_data.status = "installed"
-
-    scene_package_info.packages.append(package_data)
-
-    await save_scene_package_info(scene, scene_package_info)
+        package_data.status = "installed"
+        scene_package_info.packages.append(package_data)
+        await _save_scene_package_info(scene, scene_package_info)
 
     return package_data
 
@@ -503,17 +521,17 @@ async def update_package_properties(
         pydantic.ValidationError: If persisted metadata is invalid.
     """
 
-    scene_package_info = await get_scene_package_info(scene)
+    async with _scene_package_lock(scene):
+        scene_package_info = await get_scene_package_info(scene)
+        package_data = scene_package_info.get_package(package_registry)
 
-    package_data = scene_package_info.get_package(package_registry)
+        if not package_data:
+            return
 
-    if not package_data:
-        return
+        for property_name, property_data in package_properties.items():
+            package_data.package_properties[property_name].value = property_data.value
 
-    for property_name, property_data in package_properties.items():
-        package_data.package_properties[property_name].value = property_data.value
-
-    await save_scene_package_info(scene, scene_package_info)
+        await _save_scene_package_info(scene, scene_package_info)
 
     return package_data
 
@@ -536,29 +554,28 @@ async def uninstall_package(scene: "Scene", package_registry: str):
         pydantic.ValidationError: If persisted package metadata is invalid.
     """
 
-    scene_package_info = await get_scene_package_info(scene)
+    async with _scene_package_lock(scene):
+        scene_package_info = await get_scene_package_info(scene)
 
-    if not scene_package_info.has_package(package_registry):
-        # not installed
-        return
+        package_data = scene_package_info.get_package(package_registry)
+        if package_data is None:
+            # not installed
+            return
 
-    package_data = scene_package_info.get_package(package_registry)
+        scene_package_info.packages = [
+            p for p in scene_package_info.packages if p.registry != package_registry
+        ]
+        await _save_scene_package_info(scene, scene_package_info)
 
-    scene_package_info.packages = [
-        p for p in scene_package_info.packages if p.registry != package_registry
-    ]
+        scene_loop: SceneLoop | None = scene.active_node_graph
+        if scene_loop:
+            for node_id in package_data.installed_nodes:
+                node = scene_loop.nodes.get(node_id)
+                if node is not None:
+                    _disconnect_package_node(node)
+                    scene_loop.remove_node(node_id)
 
-    scene_loop: SceneLoop | None = scene.active_node_graph
-    if scene_loop:
-        for node_id in package_data.installed_nodes:
-            node = scene_loop.nodes.get(node_id)
-            if node is not None:
-                _disconnect_package_node(node)
-                scene_loop.remove_node(node_id)
-
-    package_data.installed_nodes = []
-
-    await save_scene_package_info(scene, scene_package_info)
+        package_data.installed_nodes = []
 
 
 async def initialize_packages(scene: "Scene", scene_loop: SceneLoop):
@@ -577,30 +594,33 @@ async def initialize_packages(scene: "Scene", scene_loop: SceneLoop):
         OSError: If package metadata cannot be read or persisted.
         pydantic.ValidationError: If persisted package metadata is invalid.
     """
-    scene_package_info = await get_scene_package_info(scene)
-    invalid_packages = []
-    for package_data in scene_package_info.packages:
-        if not package_data.configured:
-            missing = sorted(
-                name
-                for name, prop in package_data.package_properties.items()
-                if prop.required and prop.value is None
+    async with _scene_package_lock(scene):
+        scene_package_info = await get_scene_package_info(scene)
+        invalid_packages = []
+        for package_data in scene_package_info.packages:
+            if not package_data.configured:
+                missing = sorted(
+                    name
+                    for name, prop in package_data.package_properties.items()
+                    if prop.required and prop.value is None
+                )
+                invalid_packages.append(
+                    f"{package_data.registry}: missing required properties {missing}"
+                )
+            elif package_data.errors:
+                invalid_packages.append(
+                    f"{package_data.registry}: {'; '.join(package_data.errors)}"
+                )
+        if invalid_packages:
+            raise PackageInitializationError(
+                "Installed package configuration is invalid: "
+                + " | ".join(invalid_packages)
             )
-            invalid_packages.append(
-                f"{package_data.registry}: missing required properties {missing}"
-            )
-        elif package_data.errors:
-            invalid_packages.append(
-                f"{package_data.registry}: {'; '.join(package_data.errors)}"
-            )
-    if invalid_packages:
-        raise PackageInitializationError(
-            "Installed package configuration is invalid: "
-            + " | ".join(invalid_packages)
-        )
 
-    for package_data in scene_package_info.packages:
-        await initialize_package(scene, scene_loop, package_data)
+        for package_data in scene_package_info.packages:
+            await _initialize_package(
+                scene, scene_loop, package_data, scene_package_info
+            )
 
 
 async def initialize_package(
@@ -628,7 +648,19 @@ async def initialize_package(
         OSError: If package metadata cannot be read before replacement begins.
         pydantic.ValidationError: If persisted package metadata is invalid.
     """
-    scene_package_info = await get_scene_package_info(scene)
+    async with _scene_package_lock(scene):
+        scene_package_info = await get_scene_package_info(scene)
+        return await _initialize_package(
+            scene, scene_loop, package_data, scene_package_info
+        )
+
+
+async def _initialize_package(
+    scene: "Scene",
+    scene_loop: SceneLoop,
+    package_data: PackageData,
+    scene_package_info: ScenePackageInfo,
+) -> PackageData:
     persisted_package = scene_package_info.get_package(package_data.registry)
     if persisted_package is None:
         raise PackageInitializationError(
@@ -670,7 +702,7 @@ async def initialize_package(
                 properties=persisted_package.properties_for_node(node.registry),
             )
         persisted_package.installed_nodes = [node.id for node in new_nodes]
-        await save_scene_package_info(scene, scene_package_info)
+        await _save_scene_package_info(scene, scene_package_info)
     except Exception as exc:
         rollback_errors = []
         for node in reversed(attached_nodes):

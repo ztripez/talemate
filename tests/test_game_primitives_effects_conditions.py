@@ -10,7 +10,10 @@ from _node_test_helpers import run_node
 import talemate.game.engine.nodes.load_definitions  # noqa: F401
 from talemate.context import ActiveScene
 from talemate.game.engine.nodes.registry import get_node
-from talemate.game.primitives.conditions import evaluate_condition_input
+from talemate.game.primitives.conditions import (
+    _clock_complete,
+    evaluate_condition_input,
+)
 from talemate.game.primitives.effects import Effect, apply_effects
 from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
 from talemate.game.primitives.store import PrimitiveStore
@@ -26,7 +29,11 @@ def test_effects_apply_primitive_value_operations_and_ledger():
     result = apply_effects(
         store,
         [
-            {"op": "set", "target": ref, "value": 2},
+            {
+                "op": "set",
+                "target": ref,
+                "value": {"id": "tension", "min": 0, "max": 10, "value": 2},
+            },
             {"op": "inc", "target": ref, "by": 3},
             {"op": "dec", "target": ref, "by": 1},
         ],
@@ -36,7 +43,7 @@ def test_effects_apply_primitive_value_operations_and_ledger():
     assert result.ok is True
     assert [item.previous for item in result.results] == [None, 2, 5]
     assert [item.current for item in result.results] == [2, 5, 4]
-    assert store.get_primitive(ref) == {"value": 4}
+    assert store.get_primitive(ref)["value"] == 4
     effect_entries = [
         entry for entry in store.recent_ledger(10) if entry["op"].startswith("effect.")
     ]
@@ -88,15 +95,19 @@ def test_effects_unset_append_extend_and_tags():
     assert effect_entries[2]["output"]["current"] == ["relaxed"]
 
 
-def test_effects_stop_on_invalid_target_without_later_mutation():
-    """Invalid effects fail clearly and stop the remaining batch."""
+def test_effect_batch_validation_failure_rolls_back_state_and_ledger():
+    """Invalid effects fail clearly and roll back the entire batch."""
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
 
     result = apply_effects(
         store,
         [
-            {"op": "set", "target": "scene:main/meters/tension", "value": 1},
+            {
+                "op": "set",
+                "target": "scene:main/meters/tension",
+                "value": {"id": "tension", "min": 0, "max": 5, "value": 1},
+            },
             {"op": "inc", "target": "not-a-primitive-ref", "by": 1},
             {"op": "set", "target": "scene:main/meters/after", "value": 99},
         ],
@@ -106,8 +117,34 @@ def test_effects_stop_on_invalid_target_without_later_mutation():
     assert len(result.results) == 2
     assert result.results[0].ok is True
     assert result.results[1].ok is False
-    assert store.get_primitive("scene:main/meters/tension") == {"value": 1}
+    assert store.get_primitive("scene:main/meters/tension") is None
     assert store.get_primitive("scene:main/meters/after") is None
+    assert store.recent_ledger(10) == []
+
+
+def test_effect_batch_mutation_failure_rolls_back_state_and_ledger():
+    """A mutation failure discards earlier state and ledger batch mutations."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_runtime_primitive("scene:main/lists/events", {"value": "not-a-list"})
+    before = copy.deepcopy(store.root)
+
+    result = apply_effects(
+        store,
+        [
+            {"op": "set", "target": "scene:main/flags/applied", "value": True},
+            {
+                "op": "append",
+                "target": "scene:main/lists/events",
+                "value": "event",
+            },
+        ],
+    )
+
+    assert result.ok is False
+    assert [item.ok for item in result.results] == [True, False]
+    assert "must be a list" in result.results[-1].error
+    assert store.root == before
 
 
 def test_effects_validate_operation_payloads_and_missing_anchor_removal():
@@ -133,6 +170,42 @@ def test_effects_validate_operation_payloads_and_missing_anchor_removal():
     assert store.get_anchor("scene:missing") is None
 
 
+def test_meter_effects_require_canonical_bounds_and_reject_overflow():
+    """Meter effects cannot create unbounded state or mutate beyond stored bounds."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    meter_ref = "scene:main/meters/tension"
+    relationship_ref = "relationship:Model->Photographer/meters/trust"
+
+    missing_bounds = apply_effects(
+        store, {"op": "set", "target": meter_ref, "value": 2}
+    )
+    assert missing_bounds.ok is False
+    assert store.get_primitive(meter_ref) is None
+
+    assert apply_effects(
+        store,
+        {
+            "op": "set",
+            "target": meter_ref,
+            "value": {"id": "tension", "min": 0, "max": 5, "value": 4},
+        },
+    ).ok
+    assert apply_effects(
+        store, {"op": "set", "target": relationship_ref, "value": 4}
+    ).ok
+
+    meter_overflow = apply_effects(store, {"op": "inc", "target": meter_ref, "by": 2})
+    relationship_overflow = apply_effects(
+        store, {"op": "inc", "target": relationship_ref, "by": 2}
+    )
+
+    assert meter_overflow.ok is False
+    assert relationship_overflow.ok is False
+    assert store.get_primitive(meter_ref)["value"] == 4
+    assert store.get_primitive(relationship_ref)["value"] == 4
+
+
 def test_conditions_evaluate_primitive_path_tags_and_groups():
     """Primitive conditions support primitive values, tags, and group OR logic."""
     scene = Scene()
@@ -140,8 +213,12 @@ def test_conditions_evaluate_primitive_path_tags_and_groups():
     apply_effects(
         store,
         [
-            {"op": "set", "target": "scene:main/meters/tension", "value": 4},
-            {"op": "set", "target": "scene:main/meters/flag", "value": True},
+            {
+                "op": "set",
+                "target": "scene:main/meters/tension",
+                "value": {"id": "tension", "min": 0, "max": 10, "value": 4},
+            },
+            {"op": "set", "target": "scene:main/values/flag", "value": True},
             {"op": "add_tag", "target": "scene:main", "value": "danger"},
         ],
     )
@@ -160,7 +237,7 @@ def test_conditions_evaluate_primitive_path_tags_and_groups():
                     },
                     {
                         "kind": "primitive",
-                        "path": "scene:main/meters/flag",
+                        "path": "scene:main/values/flag",
                         "operator": "is_true",
                     },
                     {"kind": "anchor_has_tag", "anchor": "scene:main", "tag": "danger"},
@@ -208,7 +285,12 @@ def test_conditions_support_primitive_equality_null_and_intragroup_or():
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
     apply_effects(
-        store, {"op": "set", "target": "scene:main/meters/tension", "value": 4}
+        store,
+        {
+            "op": "set",
+            "target": "scene:main/meters/tension",
+            "value": {"id": "tension", "min": 0, "max": 10, "value": 4},
+        },
     )
 
     matches, debug = evaluate_condition_input(
@@ -257,11 +339,15 @@ def test_primitive_conditions_do_not_mutate_existing_store():
     apply_effects(
         store,
         [
-            {"op": "set", "target": "scene:main/meters/tension", "value": 4},
+            {
+                "op": "set",
+                "target": "scene:main/meters/tension",
+                "value": {"id": "tension", "min": 0, "max": 10, "value": 4},
+            },
             {
                 "op": "set",
                 "target": "scene:main/clocks/warmup",
-                "value": {"value": 2, "target": 3},
+                "value": {"id": "warmup", "value": 2, "max": 3},
             },
             {"op": "add_tag", "target": "scene:main", "value": "danger"},
         ],
@@ -335,14 +421,14 @@ def test_effect_runtime_failures_do_not_mutate_or_append_effect_ledger():
     apply_effects(
         store,
         [
-            {"op": "set", "target": "scene:main/meters/tension", "value": "high"},
+            {"op": "set", "target": "scene:main/values/tension", "value": "high"},
             {"op": "set", "target": "scene:main/decks/poses", "value": "standing"},
         ],
     )
     before = copy.deepcopy(store.root)
 
     inc_result = apply_effects(
-        store, {"op": "inc", "target": "scene:main/meters/tension", "by": 1}
+        store, {"op": "inc", "target": "scene:main/values/tension", "by": 1}
     )
     append_result = apply_effects(
         store, {"op": "append", "target": "scene:main/decks/poses", "value": "seated"}
@@ -363,7 +449,11 @@ def test_conditions_support_game_state_meter_relationship_and_clock():
     apply_effects(
         store,
         [
-            {"op": "set", "target": "character:Model/meters/confidence", "value": 3},
+            {
+                "op": "set",
+                "target": "character:Model/meters/confidence",
+                "value": {"id": "confidence", "min": 0, "max": 5, "value": 3},
+            },
             {
                 "op": "set",
                 "target": "relationship:Model->Photographer/meters/trust",
@@ -372,7 +462,7 @@ def test_conditions_support_game_state_meter_relationship_and_clock():
             {
                 "op": "set",
                 "target": "scene:main/clocks/warmup",
-                "value": {"value": 4, "target": 4},
+                "value": {"id": "warmup", "value": 4, "max": 4},
             },
         ],
     )
@@ -406,6 +496,19 @@ def test_conditions_support_game_state_meter_relationship_and_clock():
     assert matches is True
 
 
+def test_clock_complete_reads_only_canonical_clock_payload():
+    """Clock completion validates the canonical max-based representation."""
+    assert _clock_complete({"id": "warmup", "value": 4, "max": 4}, "warmup")
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        _clock_complete(
+            {"id": "warmup", "value": 4, "max": 4, "complete": True},
+            "warmup",
+        )
+    with pytest.raises(ValueError, match="Field required|Extra inputs"):
+        _clock_complete({"id": "warmup", "value": 4, "target": 4}, "warmup")
+
+
 async def test_apply_effects_node_runs_against_active_scene():
     """The ApplyEffects node exposes the effect runtime to graphs."""
     scene = Scene()
@@ -418,7 +521,11 @@ async def test_apply_effects_node_runs_against_active_scene():
         scene=scene,
         inputs={
             "effects": [
-                {"op": "set", "target": "scene:main/meters/tension", "value": 7}
+                {
+                    "op": "set",
+                    "target": "scene:main/meters/tension",
+                    "value": {"id": "tension", "min": 0, "max": 10, "value": 7},
+                }
             ],
             "reason": "node-test",
         },
@@ -426,9 +533,12 @@ async def test_apply_effects_node_runs_against_active_scene():
 
     assert outputs["ok"] is True
     assert outputs["results"][0]["current"] == 7
-    assert PrimitiveStore.for_scene(scene).get_primitive(
-        "scene:main/meters/tension"
-    ) == {"value": 7}
+    assert (
+        PrimitiveStore.for_scene(scene).get_primitive("scene:main/meters/tension")[
+            "value"
+        ]
+        == 7
+    )
 
 
 async def test_evaluate_condition_node_runs_against_active_scene():
@@ -436,7 +546,12 @@ async def test_evaluate_condition_node_runs_against_active_scene():
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
     apply_effects(
-        store, {"op": "set", "target": "scene:main/meters/tension", "value": 7}
+        store,
+        {
+            "op": "set",
+            "target": "scene:main/meters/tension",
+            "value": {"id": "tension", "min": 0, "max": 10, "value": 7},
+        },
     )
     with ActiveScene(scene):
         node_cls = get_node("primitives/conditions/EvaluateCondition")
