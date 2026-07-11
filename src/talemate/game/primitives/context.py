@@ -16,6 +16,7 @@ from talemate.game.primitives.anchors import (
     relationship_participants,
 )
 from talemate.game.primitives.attributes import AttributeResolver
+from talemate.game.primitives.adventure import AdventureEngine
 from talemate.game.primitives.relationships import RelationshipGraph
 from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
 from talemate.game.primitives.store import PrimitiveStore
@@ -160,6 +161,14 @@ class PrimitiveContextRenderer:
         rendered_anchors: list[str] = []
         rendered_refs: list[str] = []
         skipped_sources: list[str] = []
+
+        if request.audience != "creator":
+            adventure_context, story_scene_anchor = (
+                AdventureEngine().render_current_context_with_anchor(scene)
+            )
+            if adventure_context and story_scene_anchor is not None:
+                sections.append(adventure_context)
+                rendered_anchors.append(story_scene_anchor)
 
         for anchor_key in candidates:
             lines, refs, skipped = self._render_anchor(scene, store, anchor_key)

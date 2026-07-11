@@ -87,7 +87,14 @@ def test_primitive_definitions_roundtrip_as_direct_definitions_object():
         "clocks": {"escape": {"id": "escape", "max": 4, "value": 1}},
         "relationship_models": {"default": {"dimensions": ["trust"]}},
         "attribute_sources": {"mood": {"source": "literal", "value": "calm"}},
-        "adventures": {"intro": {"scenes": ["arrival"]}},
+        "adventures": {
+            "intro": {
+                "id": "intro",
+                "title": "Introduction",
+                "start_scene": "arrival",
+                "scenes": {"arrival": {"id": "arrival", "title": "Arrival"}},
+            }
+        },
     }
 
     model = PrimitiveDefinitions.model_validate(definitions)

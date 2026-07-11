@@ -36,6 +36,7 @@ _DEFINITION_MODEL_LOCATIONS: Mapping[str, tuple[str, str]] = MappingProxyType(
         "modifiers": ("talemate.game.primitives.modifiers", "RollModifier"),
         "meters": ("talemate.game.primitives.definitions", "MeterPayload"),
         "clocks": ("talemate.game.primitives.definitions", "ClockPayload"),
+        "adventures": ("talemate.game.primitives.adventure", "AdventureDefinition"),
     }
 )
 

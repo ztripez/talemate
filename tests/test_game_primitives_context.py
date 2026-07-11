@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from talemate.character import Character
 from talemate.game.primitives.attributes import AttributeResolver
+from talemate.game.primitives.adventure import AdventureEngine
 from talemate.game.primitives.context import PrimitiveContextRenderer
 from talemate.game.primitives.decks import DeckEngine
 from talemate.game.primitives.relationships import RelationshipGraph
@@ -33,6 +34,43 @@ def test_scene_without_primitive_state_remains_untouched():
     assert result.anchors == []
     assert result.refs == []
     assert GAME_PRIMITIVES_KEY not in scene.game_state.variables
+
+
+def test_current_story_scene_is_included_for_prompt_audiences():
+    """Relevant context prepends current adventure prose for narrator prompts."""
+    scene = Scene()
+    store = PrimitiveStore.for_scene(scene)
+    store.set_definition(
+        "adventures",
+        "demo",
+        {
+            "id": "demo",
+            "title": "Demo",
+            "start_scene": "opening",
+            "scenes": {
+                "opening": {
+                    "id": "opening",
+                    "title": "Opening",
+                    "goals": ["Set the tone"],
+                }
+            },
+        },
+    )
+    AdventureEngine().activate(scene, "demo")
+
+    result = PrimitiveContextRenderer().render_relevant_context(
+        scene, audience="narrator"
+    )
+
+    assert "Current story scene: Opening" in result.content
+    assert "Set the tone" in result.content
+    assert result.anchors == ["story_scene:opening"]
+
+    creator = PrimitiveContextRenderer().render_relevant_context(
+        scene, audience="creator"
+    )
+    assert "Current story scene" not in creator.content
+    assert "story_scene:opening" not in creator.anchors
 
 
 def test_hidden_prompt_and_summary_attribute_rendering():
