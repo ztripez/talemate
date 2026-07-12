@@ -1,5 +1,6 @@
 """Integration tests for opted-in primitive generation during scene loading."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -8,7 +9,8 @@ from pydantic import ValidationError
 
 from talemate import Scene
 from talemate.game.primitives.authoring.planner import PrimitiveScenarioBundleResult
-from talemate.load import SceneInitialization, load_scene_from_data
+from talemate.load import SceneInitialization, load_scene, load_scene_from_data
+from talemate.server.websocket_server import WebsocketHandler
 
 
 def _scene_data(**overrides):
@@ -24,6 +26,38 @@ def _scene_data(**overrides):
     }
     data.update(overrides)
     return data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        (None, "Scene file path is required"),
+        ("   ", "Scene file path cannot be empty"),
+        (object(), "Scene file path must be a string or path-like value"),
+    ],
+)
+async def test_load_scene_rejects_invalid_paths_explicitly(path, message):
+    """A malformed load request fails before attempting path operations."""
+    with pytest.raises(ValueError, match=message):
+        await load_scene(Scene(), path)
+
+
+@pytest.mark.asyncio
+async def test_websocket_handler_rejects_invalid_path_without_replacing_scene():
+    """Handler validation reports failure without deactivating the current scene."""
+    handler = WebsocketHandler.__new__(WebsocketHandler)
+    current_scene = Scene()
+    current_scene.active = True
+    handler.scene = current_scene
+    handler.out_queue = asyncio.Queue()
+
+    result = await handler.load_scene("   ")
+
+    assert result is False
+    assert handler.scene is current_scene
+    assert current_scene.active is True
+    assert (await handler.out_queue.get())["id"] == "scene.load_failure"
 
 
 @pytest.fixture

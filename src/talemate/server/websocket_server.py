@@ -15,7 +15,7 @@ from talemate.context import ActiveScene
 from talemate.emit import Emission, Receiver, abort_wait_for_input, emit
 import talemate.emit.async_signals as async_signals
 from talemate.files import list_scenes_directory
-from talemate.load import load_scene, SceneInitialization
+from talemate.load import load_scene, normalize_scene_file_path, SceneInitialization
 from talemate.scene_assets import Asset, get_media_type_from_file_path, VIS_TYPE
 from talemate.server import (
     agent_config,
@@ -146,6 +146,31 @@ class WebsocketHandler(SceneAssetsBatchingMixin, Receiver):
         rev: int | None = None,
         scene_initialization: dict | None = None,
     ):
+        """Load and activate a scene from a validated filesystem path.
+
+        Args:
+            path_or_data: String or path-like location of the scene to load.
+            reset: Whether to reset persisted scene state during loading.
+            callback: Optional awaitable callback invoked after loading succeeds.
+            file_name: Reserved filename supplied by existing callers.
+            rev: Optional revision to reconstruct after loading the source scene.
+            scene_initialization: Optional new-scene initialization fields.
+
+        Returns:
+            ``False`` when validation or loading fails; otherwise ``None``.
+
+        """
+        try:
+            scene_path = normalize_scene_file_path(path_or_data)
+            initialization = (
+                SceneInitialization(**scene_initialization)
+                if scene_initialization
+                else None
+            )
+        except Exception as exc:
+            await self.load_scene_failure(exc)
+            return False
+
         try:
             if self.scene:
                 instance.get_agent("memory").close_db(self.scene)
@@ -164,17 +189,13 @@ class WebsocketHandler(SceneAssetsBatchingMixin, Receiver):
 
             with ActiveScene(scene):
                 try:
-                    # Use input path directly
-                    scene_path = path_or_data
                     add_to_recent = rev is None
                     scene = await load_scene(
                         scene,
                         scene_path,
                         reset=reset,
                         add_to_recent=add_to_recent,
-                        scene_initialization=SceneInitialization(**scene_initialization)
-                        if scene_initialization
-                        else None,
+                        scene_initialization=initialization,
                     )
                     # If a revision is requested, reconstruct and load it
                     if rev is not None:
@@ -211,12 +232,20 @@ class WebsocketHandler(SceneAssetsBatchingMixin, Receiver):
 
             with ActiveScene(scene):
                 await scene.start()
-        except Exception:
+        except Exception as exc:
             log.error("load_scene", error=traceback.format_exc())
+            await self.load_scene_failure(exc)
+            return False
         finally:
             self.scene.active = False
 
     async def load_scene_failure(self, error: Exception):
+        """Emit an error status and queue a hidden scene-load failure event.
+
+        Args:
+            error: Exception whose message is exposed in the status emission.
+
+        """
         emit("status", message=str(error), status="error")
         await self.out_queue.put(
             {

@@ -1,3 +1,5 @@
+"""Manage the single frontend websocket connection and dispatch client requests."""
+
 import asyncio
 import json
 import traceback
@@ -15,6 +17,7 @@ from talemate.server.websocket_server import WebsocketHandler
 from talemate.util.data import JSONEncoder
 from talemate.context import ActiveScene, Interaction
 from talemate.game.engine.nodes.registry import import_initial_node_definitions
+from talemate.load import normalize_scene_file_path
 
 
 log = structlog.get_logger("talemate")
@@ -27,10 +30,12 @@ _active_frontend_websocket_handler = None
 
 
 def get_active_frontend_handler():
+    """Return the active frontend websocket handler, or ``None`` when disconnected."""
     return _active_frontend_websocket_handler
 
 
 async def websocket_endpoint(websocket):
+    """Run request, response, status, and liveness loops for one frontend socket."""
     global _active_frontend_websocket
     global _active_frontend_websocket_handler
 
@@ -125,25 +130,12 @@ async def websocket_endpoint(websocket):
 
             with ActiveScene(handler.scene):
                 if action_type == "load_scene":
-                    if scene_task:
-                        log.info("Unloading current scene")
-                        handler.scene.continue_scene = False
-                        scene_task.cancel()
-
                     file_path = data.get("file_path")
                     scene_data = data.get("scene_data")
                     filename = data.get("filename")
                     reset = data.get("reset", False)
                     rev = data.get("rev")
                     scene_initialization = data.get("scene_initialization")
-
-                    await message_queue.put(
-                        {
-                            "type": "system",
-                            "id": "scene.loading",
-                            "status": "loading",
-                        }
-                    )
 
                     async def scene_loading_done():
                         await message_queue.put(
@@ -159,10 +151,30 @@ async def websocket_endpoint(websocket):
                         )
                         instance.emit_agents_status()
 
-                    if scene_data and filename:
+                    if scene_data is not None and not filename:
+                        raise ValueError("Uploaded scene data requires a filename")
+                    if scene_data is not None:
                         file_path = handler.handle_character_card_upload(
                             scene_data, filename
                         )
+                    if file_path is None:
+                        raise ValueError(
+                            "load_scene requires file_path or uploaded scene_data"
+                        )
+                    file_path = normalize_scene_file_path(file_path)
+
+                    if scene_task:
+                        log.info("Unloading current scene")
+                        handler.scene.continue_scene = False
+                        scene_task.cancel()
+
+                    await message_queue.put(
+                        {
+                            "type": "system",
+                            "id": "scene.loading",
+                            "status": "loading",
+                        }
+                    )
 
                     log.info("load_scene", file_path=file_path, reset=reset)
 

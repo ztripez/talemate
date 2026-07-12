@@ -1,3 +1,5 @@
+"""Emit lifecycle status for foreground and background asynchronous operations."""
+
 import asyncio
 import structlog
 from functools import wraps
@@ -16,6 +18,8 @@ log = structlog.get_logger("talemate.status")
 
 
 class set_loading:
+    """Decorate a coroutine with busy, success, cancellation, and failure statuses."""
+
     def __init__(
         self,
         message,
@@ -25,6 +29,7 @@ class set_loading:
         cancellable: bool = False,
         as_async: bool = False,
     ):
+        """Configure status text, terminal states, cancellation, and task wrapping."""
         self.message = message
         self.set_busy = set_busy
         self.set_success = set_success
@@ -33,6 +38,7 @@ class set_loading:
         self.as_async = as_async
 
     def __call__(self, fn):
+        """Wrap an asynchronous callable with the configured status lifecycle."""
         async def wrapper(*args, **kwargs):
             if self.set_busy:
                 status_data = {}
@@ -64,6 +70,8 @@ class set_loading:
                 log.error("Error in set_loading wrapper", error=e)
                 if self.set_error:
                     emit("status", message=f"{self.message}: Failed", status="error")
+                else:
+                    emit("status", message="", status="idle")
                 raise e
 
         # if as_async we want to wrap the function in a coroutine
@@ -85,9 +93,9 @@ class set_loading:
 
 
 def _consume_task_exception(task: asyncio.Task) -> None:
-    """
-    Mark a background task's exception as retrieved to suppress the
-    "Task exception was never retrieved" warning at GC time. The
+    """Mark a background task exception as retrieved.
+
+    Suppresses the "Task exception was never retrieved" warning at GC time. The
     exception itself is already logged by the set_loading wrapper.
     """
     if task.cancelled():
@@ -104,9 +112,7 @@ def background_task(
     set_success: bool = False,
     set_error: bool = True,
 ):
-    """
-    Decorator: schedule the wrapped coroutine as a background asyncio task
-    with set_loading status emissions and exception cleanup.
+    """Schedule a coroutine as a background task with status emissions.
 
     The wrapped function returns immediately with the task object — calling
     code can ignore it. This is what frees the websocket receive loop so
@@ -139,12 +145,16 @@ def background_task(
 
 
 class LoadingStatus:
+    """Emit progress statuses with an optional bounded step counter."""
+
     def __init__(self, max_steps: int | None = None, cancellable: bool = False):
+        """Configure the optional total step count and cancellation indicator."""
         self.max_steps = max_steps
         self.current_step = 0
         self.cancellable = cancellable
 
     def __call__(self, message: str):
+        """Advance one step and emit a busy status with the supplied message."""
         self.current_step += 1
 
         if self.max_steps is None:
@@ -162,6 +172,7 @@ class LoadingStatus:
         )
 
     def done(self, message: str = "", status: str = "idle"):
+        """Emit a terminal status after at least one progress step."""
         if self.current_step == 0:
             return
 

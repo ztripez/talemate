@@ -310,7 +310,9 @@ class Scene(Emitter):
     def project_name(self) -> str:
         if self._project_name:
             return self._project_name
-        return self.name.replace(" ", "-").replace("'", "").lower()
+        from talemate.load.project import to_project_name
+
+        return to_project_name(self.name)
 
     @project_name.setter
     def project_name(self, value: str):
