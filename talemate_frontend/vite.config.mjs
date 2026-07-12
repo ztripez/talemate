@@ -22,7 +22,10 @@ export default defineConfig(({ mode }) => {
   );
 
   return {
-    plugins: [vue(), vuetify({ autoImport: true }), runtimeEnv()],
+    plugins: [
+      vue(),
+      ...(mode === "test" ? [] : [vuetify({ autoImport: true }), runtimeEnv()]),
+    ],
     publicDir: "public",
     resolve: {
       alias: {
@@ -36,6 +39,10 @@ export default defineConfig(({ mode }) => {
         overlay: false,
       },
       allowedHosts: ALLOWED_HOSTS,
+    },
+    test: {
+      environment: "jsdom",
+      setupFiles: ["./src/test/setup.js"],
     },
   };
 });

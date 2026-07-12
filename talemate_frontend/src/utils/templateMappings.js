@@ -3,6 +3,12 @@
  * Used for displaying template types consistently across the application
  */
 
+/**
+ * Resolve the Material Design icon for a template type.
+ *
+ * @param {{template_type?: string}} template - Template whose registered type is displayed.
+ * @returns {string} Registered icon name, or `mdi-cube-scan` for unknown types.
+ */
 export function iconForTemplate(template) {
     const templateType = template.template_type;
     
@@ -22,10 +28,18 @@ export function iconForTemplate(template) {
         return 'mdi-drama-masks';
     } else if (templateType == 'scene_type') {
         return 'mdi-movie-open';
+    } else if (templateType == 'game_primitive_bundle') {
+        return 'mdi-package-variant-closed';
     }
     return 'mdi-cube-scan';
 }
 
+/**
+ * Resolve the theme color for a template type.
+ *
+ * @param {{template_type?: string}} template - Template whose registered type is displayed.
+ * @returns {string} Registered theme color, or `grey` for unknown types.
+ */
 export function colorForTemplate(template) {
     const templateType = template.template_type;
     
@@ -45,7 +59,8 @@ export function colorForTemplate(template) {
         return 'persona';
     } else if (templateType == 'scene_type') {
         return 'highlight6';
+    } else if (templateType == 'game_primitive_bundle') {
+        return 'secondary';
     }
     return 'grey';
 }
-

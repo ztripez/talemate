@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "serve": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "vitest run"
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.1",
@@ -26,14 +27,18 @@
     "vue": "^3.5",
     "vue-codemirror": "^6.1.1",
     "vuetify": "^3.12",
-    "webfontloader": "^1.6.28"
+    "webfontloader": "^1.6.28",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/test-utils": "^2.4.11",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.3",
-    "vite": "^7.0.4",
+    "vite": "^7.3.6",
     "vite-plugin-runtime-env": "^1.0.0",
-    "vite-plugin-vuetify": "^2.1.1"
+    "vite-plugin-vuetify": "^2.1.1",
+    "vitest": "^4.1.10"
   },
   "browserslist": [
     "> 1%",

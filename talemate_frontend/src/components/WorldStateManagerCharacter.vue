@@ -194,6 +194,9 @@
                                     <v-tab value="attributes" prepend-icon="mdi-format-list-bulleted-type">
                                         Attributes
                                     </v-tab>
+                                    <v-tab value="relationships" prepend-icon="mdi-account-arrow-right">
+                                        Relationships
+                                    </v-tab>
                                     <v-tab value="details" prepend-icon="mdi-format-list-text">
                                         Details
                                     </v-tab>
@@ -227,6 +230,12 @@
                                             :generation-options="generationOptions"
                                             :templates="templates"
                                             :immutable-character="character" />
+                                        </v-tabs-window-item>
+                                        <v-tabs-window-item value="relationships">
+                                            <WorldStateManagerCharacterRelationships
+                                                :character-name="character.name"
+                                                @navigate-anchor="(anchor) => $emit('world-state-manager-navigate', 'scene', 'primitives', anchor)"
+                                            />
                                         </v-tabs-window-item>
                                         <v-tabs-window-item value="details">
                                             <WorldStateManagerCharacterDetails
@@ -349,6 +358,7 @@ import WorldStateManagerCharacterReinforcements from './WorldStateManagerCharact
 import WorldStateManagerCharacterActor from './WorldStateManagerCharacterActor.vue';
 import WorldStateManagerCharacterCreator from './WorldStateManagerCharacterCreator.vue';
 import WorldStateManagerCharacterVisuals from './WorldStateManagerCharacterVisuals.vue';
+import WorldStateManagerCharacterRelationships from './WorldStateManagerCharacterRelationships.vue';
 import { MAX_CONTENT_WIDTH, FOLDER_NAME_MAX_LENGTH } from '@/constants';
 import { isPrimaryModifier, primaryModifierLabel } from '@/utils/keyboardModifiers';
 
@@ -364,6 +374,7 @@ export default {
         WorldStateManagerCharacterActor,
         WorldStateManagerCharacterCreator,
         WorldStateManagerCharacterVisuals,
+        WorldStateManagerCharacterRelationships,
     },
     props: {
         scene: Object,

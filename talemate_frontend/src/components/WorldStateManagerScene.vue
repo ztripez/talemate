@@ -1,14 +1,14 @@
 <template>
-    <div v-if="scene !== null && scene.data != null" :style="{ maxWidth: MAX_CONTENT_WIDTH }">
-        <v-card>
+    <div v-if="scene !== null && scene.data != null" class="scene-manager" :style="{ maxWidth: MAX_CONTENT_WIDTH }">
+        <v-card class="scene-card">
             <v-card-title>
                 {{ title }}
                 <div class="text-muted text-caption">
                     {{ scene.data.context }}
                 </div>
             </v-card-title>
-            <v-card-text>
-                <v-tabs v-model="page" color="primary" density="compact">
+            <v-card-text class="scene-content">
+                <v-tabs v-model="page" color="primary" density="compact" show-arrows class="scene-navigation">
                     <v-tab value="outline">
                         <v-icon size="small" class="mr-1">mdi-script-text</v-icon>
                         Outline
@@ -20,6 +20,10 @@
                     <v-tab value="gamestate">
                         <v-icon size="small" class="mr-1">mdi-gamepad-square</v-icon>
                         Game State
+                    </v-tab>
+                    <v-tab value="primitives" @click="navigate('primitives')">
+                        <v-icon size="small" class="mr-1">mdi-puzzle</v-icon>
+                        Game Systems
                     </v-tab>
                     <v-tab value="shared">
                         <v-icon size="small" class="mr-1">mdi-earth-arrow-right</v-icon>
@@ -68,6 +72,13 @@
                         />
                     </v-window-item>
 
+                    <v-window-item value="primitives">
+                        <WorldStateManagerSceneGameSystems
+                            ref="primitives"
+                            :is-visible="page === 'primitives'"
+                        />
+                    </v-window-item>
+
                     <v-window-item value="shared">
                         <WorldStateManagerSceneSharedWorld 
                             ref="shared"
@@ -110,6 +121,7 @@ import WorldStateManagerSceneSettings from './WorldStateManagerSceneSettings.vue
 import WorldStateManagerSceneExport from './WorldStateManagerSceneExport.vue';
 import WorldStateManagerSceneDirection from './WorldStateManagerSceneDirection.vue';
 import GameState from './GameState.vue';
+import WorldStateManagerSceneGameSystems from './WorldStateManagerSceneGameSystems.vue';
 import WorldStateManagerSceneSharedWorld from './WorldStateManagerSceneSharedWorld.vue';
 import { MAX_CONTENT_WIDTH } from '@/constants';
 
@@ -121,6 +133,7 @@ export default {
         WorldStateManagerSceneExport,
         WorldStateManagerSceneDirection,
         GameState,
+        WorldStateManagerSceneGameSystems,
         WorldStateManagerSceneSharedWorld,
     },
     props: {
@@ -156,6 +169,8 @@ export default {
             try {
                 if (this.page === 'gamestate') {
                     this.$refs.gamestate?.refresh?.();
+                } else if (this.page === 'primitives') {
+                    this.$refs.primitives?.refresh?.();
                 } else if (this.page === 'director') {
                     this.$refs.director?.getSceneIntent?.();
                 } else if (this.page === 'shared') {
@@ -165,8 +180,11 @@ export default {
                 console.error('WorldStateManagerScene: refresh failed', e);
             }
         },
-        navigate(page) {
+        navigate(page, anchor) {
             this.page = page;
+            if (page === 'primitives' && anchor) {
+                this.$nextTick(() => this.$refs.primitives?.focusAnchor?.(anchor));
+            }
         },
         handleMessage(message) {
             return message;
@@ -181,3 +199,12 @@ export default {
 }
 
 </script>
+
+<style scoped>
+.scene-manager, .scene-card, .scene-content, .scene-navigation { min-width: 0; max-width: 100%; }
+
+@media (max-width: 700px) {
+    .scene-content { padding-inline: 0.75rem; }
+    .scene-navigation { overflow-x: auto; }
+}
+</style>

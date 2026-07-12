@@ -7,6 +7,34 @@ on:
     branches: [ main, 'prep-*' ]
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: talemate_frontend
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'npm'
+        cache-dependency-path: talemate_frontend/package-lock.json
+
+    - name: Install frontend dependencies
+      run: npm ci
+
+    - name: Run frontend tests
+      run: npm test
+
+    - name: Build frontend
+      run: npm run build
+
+    - name: Audit frontend dependencies
+      run: npm audit --audit-level=high
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -59,4 +87,4 @@ jobs:
     - name: Run tests
       run: |
         source .venv/bin/activate
-        pytest tests/ -p no:warnings 
+        pytest tests/ -p no:warnings

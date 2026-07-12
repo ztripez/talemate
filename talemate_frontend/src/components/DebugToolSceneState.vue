@@ -8,6 +8,9 @@
                 <v-alert type="warning" class="text-caption" variant="tonal">
                     Editing the scene state through this editor can ABSOLUTELY brick your game. Be careful. However as long as you do not save the scene afterwards, you can always reload the game to get back to the original state.
                 </v-alert>
+                <v-alert v-if="error" type="error" class="mt-3" variant="tonal">
+                    {{ error }}
+                </v-alert>
                 <Codemirror
                     v-model="sceneStateJSON"
                     :extensions="extensions"
@@ -41,6 +44,7 @@ export default {
             sceneStateJSON: null,
             dialog: false,
             busy: false,
+            error: null,
         }
     },
     inject: ['getWebsocket', 'registerMessageHandler', 'unregisterMessageHandler', 'setWaitingForInput'],
@@ -61,13 +65,20 @@ export default {
         },
 
         updateSceneState() {
-            self.busy = true;
-            const data = JSON.parse(this.sceneStateJSON);
-            this.getWebsocket().send(JSON.stringify({
-                type: 'devtools',
-                action: 'update_scene_state',
-                state: data,
-            }));
+            this.error = null;
+            let data;
+            try {
+                data = JSON.parse(this.sceneStateJSON);
+                this.getWebsocket().send(JSON.stringify({
+                    type: 'devtools',
+                    action: 'update_scene_state',
+                    state: data,
+                }));
+                this.busy = true;
+            } catch (error) {
+                this.busy = false;
+                this.error = error instanceof Error ? error.message : String(error);
+            }
         },
 
         handleMessage(data) {
@@ -77,8 +88,12 @@ export default {
             if(data.action === 'scene_state') {
                 this.sceneState = data.data;
                 this.sceneStateJSON = JSON.stringify(data.data, null, 4);
-            } else if(data.action === 'operation_done') {
+            } else if(data.action === 'scene_state_updated') {
                 this.busy = false;
+                this.error = null;
+            } else if(data.action === 'scene_state_update_failed') {
+                this.busy = false;
+                this.error = data.error?.message || 'Scene state update failed without an error message';
             }
         },
     },

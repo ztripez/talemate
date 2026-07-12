@@ -186,6 +186,14 @@
                     />
                 </div>
 
+                <div v-else-if="template.template_type === 'game_primitive_bundle'">
+                    <TemplateGamePrimitiveBundle
+                        :immutable-template="template"
+                        :scene-active="sceneActive"
+                        @update="(template) => applyAndSaveTemplate(template)"
+                    />
+                </div>
+
             </v-form>
 
         </v-card-text>
@@ -264,6 +272,7 @@ import TemplateCharacterAttribute from './TemplateCharacterAttribute.vue';
 import TemplateCharacterDetail from './TemplateCharacterDetail.vue';
 import TemplateSpices from './TemplateSpices.vue';
 import TemplateSceneType from './TemplateSceneType.vue';
+import TemplateGamePrimitiveBundle from './TemplateGamePrimitiveBundle.vue';
 import { iconForTemplate, colorForTemplate } from '../utils/templateMappings.js';
 
 export default {
@@ -279,6 +288,7 @@ export default {
         TemplateCharacterDetail,
         TemplateSpices,
         TemplateSceneType,
+        TemplateGamePrimitiveBundle,
     },
     props: {
         immutableTemplates: Object,
@@ -349,6 +359,7 @@ export default {
                 { "title": "Visual style", "value": 'visual_style'},
                 { "title": "Agent persona", "value": 'agent_persona'},
                 { "title": "Scene type", "value": 'scene_type'},
+                { "title": "Game Primitive bundle", "value": 'game_primitive_bundle'},
             ],
             template: null,
             group: null,
@@ -364,6 +375,7 @@ export default {
                 visual_style: "Visual style templates define how image prompts are constructed (positive/negative prefixes and suffixes) and the prompting type (keywords vs descriptive).",
                 agent_persona: "Agent personas define how an agent should present and behave in prompts (tone, perspective, style). Assign a persona per agent in Scene Settings. (Currently director only)",
                 scene_type: "Scene type templates are used to define different types of scenes that can be played in your game. Each scene type has different rules and constraints that guide the generation and flow of the scene.",
+                game_primitive_bundle: "Reusable authored Game Primitive definitions and exact anchors. Bundles apply only through isolated scene drafts and never include runtime or active progress.",
             }
         };
     },
