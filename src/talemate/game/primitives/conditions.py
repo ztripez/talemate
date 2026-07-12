@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
+from talemate.game.primitives.constants import CONDITION_KINDS
 from talemate.game.primitives.definitions import ClockPayload
-from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 from talemate.game.primitives.values import primitive_payload_value
 from talemate.game.schema import (
     ConditionOperator,
     compare_condition_values,
     read_condition_path,
 )
+
+if TYPE_CHECKING:
+    from talemate.game.primitives.store import PrimitiveStoreReader
 
 #: Comparison operators accepted by primitive-aware conditions.
 Operator = ConditionOperator
@@ -44,17 +47,7 @@ class PrimitiveCondition(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    kind: Literal[
-        "path",
-        "primitive",
-        "anchor_has_tag",
-        "anchor_missing_tag",
-        "meter",
-        "clock_complete",
-        "relationship",
-        "always",
-        "never",
-    ] = "path"
+    kind: Literal[*CONDITION_KINDS] = "path"
     path: str | None = None
     operator: Operator | None = None
     value: pydantic.JsonValue | None = None
@@ -186,7 +179,12 @@ def evaluate_condition_input(
         PrimitiveStoreError: If condition evaluation reads invalid primitive state.
     """
     groups = _normalize_condition_groups(condition)
-    store = PrimitiveStore.for_scene(scene) if _groups_require_store(groups) else None
+    if _groups_require_store(groups):
+        from talemate.game.primitives.store import PrimitiveStore
+
+        store = PrimitiveStore.for_scene(scene)
+    else:
+        store = None
     all_debug: list[PrimitiveConditionGroupResult] = []
     for group in groups:
         result = evaluate_condition_group(scene, store, group)
@@ -225,6 +223,8 @@ def conditions_match(
     if not groups:
         return True
     if store is None and _groups_require_store(groups):
+        from talemate.game.primitives.store import PrimitiveStore
+
         store = PrimitiveStore.for_scene(scene)
     return any(
         evaluate_condition_group(scene, store, group).matches for group in groups

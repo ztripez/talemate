@@ -33,7 +33,7 @@ from talemate.game.engine.nodes.registry import (
 )
 from talemate.game.engine.nodes.scene import SceneLoop
 from talemate.game.primitives.attributes import AttributeResolver
-from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
+from talemate.game.primitives.constants import GAME_PRIMITIVES_KEY
 from talemate.tale_mate import Scene
 
 PACKAGE_REGISTRY = "package/talemate/GamePrimitives"

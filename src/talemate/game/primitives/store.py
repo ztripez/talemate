@@ -8,25 +8,22 @@ from typing import TYPE_CHECKING, Any, Protocol
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
-from talemate.game.primitives.definitions import (
-    ClockPayload,
-    MeterPayload,
-    coerce_definition_payload,
+from talemate.game.primitives.constants import (
+    DEFAULT_LEDGER_LIMIT,
+    GAME_PRIMITIVES_KEY,
 )
+from talemate.game.primitives.containers import AnchorPrimitives, PrimitiveDefinitions
 from talemate.game.primitives.exceptions import PrimitiveStoreError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.schema import (
-    DEFAULT_LEDGER_LIMIT,
-    GAME_PRIMITIVES_KEY,
     AnchorPayload,
-    PrimitivePayload,
     PrimitiveRootPayload,
-    RollTableInstancePayload,
     default_anchor,
     default_root,
 )
 
 if TYPE_CHECKING:
+    from talemate.game.primitives.store_snapshot import PrimitiveStoreSnapshot
     from talemate.tale_mate import Scene
 
 
@@ -114,7 +111,22 @@ class PrimitiveStore:
 
         Unlike a mutable store, the snapshot never revalidates the whole root for
         individual reads and exposes no mutable root reference.
+
+        Args:
+            scene: Scene whose primitive root is read without initialization.
+
+        Returns:
+            Detached validated snapshot of the existing or default empty root.
+
+        Raises:
+            PrimitiveStoreError: If existing primitive state is malformed.
+
+        Side Effects:
+            None; an absent primitive root is not added to the scene.
+
         """
+        from talemate.game.primitives.store_snapshot import PrimitiveStoreSnapshot
+
         variables = scene.game_state.variables
         root = (
             variables[GAME_PRIMITIVES_KEY]
@@ -323,7 +335,9 @@ class PrimitiveStore:
 
         """
         self.ensure_shape()
-        definition_payload = self._coerce_definition_payload(kind, definition_id, value)
+        definition_payload = self._validate_definition_payload(
+            kind, definition_id, value
+        )
         definitions = self.root["definitions"]
         if kind not in definitions:
             definitions[kind] = {}
@@ -408,7 +422,7 @@ class PrimitiveStore:
     ) -> None:
         """Persist a primitive payload with optional ledger recording."""
         primitive_ref = self._coerce_primitive(ref)
-        payload = self._coerce_primitive_payload(primitive_ref, value)
+        payload = self._validate_primitive_payload(primitive_ref, value)
         self._validate_ledger_limit(self.max_ledger_length)
         anchor_payload = self._get_anchor_payload(primitive_ref.anchor, create=False)
         primitive_kind = None
@@ -490,6 +504,7 @@ class PrimitiveStore:
         Raises:
             InvalidAnchorRef: If a persisted anchor key cannot be parsed.
             PrimitiveStoreError: If the persisted primitive root is invalid.
+
         """
         self.ensure_shape()
         keys = []
@@ -514,6 +529,7 @@ class PrimitiveStore:
         Raises:
             InvalidAnchorRef: If ``anchor`` is a string that cannot be parsed.
             PrimitiveStoreError: If the persisted root or anchor payload is invalid.
+
         """
         anchor_payload = self.get_anchor(anchor)
         if anchor_payload is None:
@@ -589,34 +605,27 @@ class PrimitiveStore:
             primitives[kind] = {}
         return primitives[kind]
 
-    def _coerce_primitive_payload(
+    def _validate_primitive_payload(
         self, ref: PrimitiveRef, value: Any
     ) -> dict[str, Any]:
         """Validate a primitive payload as a JSON-compatible object."""
         try:
-            model_type = {
-                "meters": MeterPayload,
-                "clocks": ClockPayload,
-                "roll_tables": RollTableInstancePayload,
-            }.get(ref.kind)
-            if model_type is not None:
-                model = model_type.model_validate(value)
-                if ref.kind in {"meters", "clocks"} and model.id != ref.id:
-                    label = ref.kind.removesuffix("s").capitalize()
-                    raise ValueError(
-                        f"{label} key '{ref.id}' must match id '{model.id}'"
-                    )
-                return model.model_dump(mode="json")
-            return PrimitivePayload.model_validate(value).model_dump(mode="json")
+            payload = AnchorPrimitives.model_validate({ref.kind: {ref.id: value}})[
+                ref.kind
+            ][ref.id]
+            return payload.model_dump(mode="json")
         except (pydantic.ValidationError, ValueError) as exc:
             raise PrimitiveStoreError(f"Invalid primitive payload: {exc}") from exc
 
-    def _coerce_definition_payload(
+    def _validate_definition_payload(
         self, kind: str, definition_id: str, value: Any
     ) -> dict[str, Any]:
         """Validate a definition payload with kind-specific schemas when known."""
         try:
-            return coerce_definition_payload(kind, definition_id, value)
+            payload = PrimitiveDefinitions.model_validate(
+                {kind: {definition_id: value}}
+            )[kind][definition_id]
+            return payload.model_dump(mode="json")
         except (pydantic.ValidationError, ValueError) as exc:
             raise PrimitiveStoreError(
                 f"Invalid primitive definition {kind}/{definition_id}: {exc}"
@@ -667,66 +676,3 @@ class PrimitiveStore:
         except (KeyError, pydantic.ValidationError, TypeError) as exc:
             raise PrimitiveStoreError(f"Invalid primitive ledger: {exc}") from exc
         return [entry.model_dump(mode="json") for entry in ledger_entries]
-
-
-class PrimitiveStoreSnapshot:
-    """Detached, validated primitive state for repeated read-only operations."""
-
-    def __init__(self, validated_root: PrimitiveRootPayload):
-        """Create detached storage from an explicitly validated root model."""
-        if not isinstance(validated_root, PrimitiveRootPayload):
-            raise TypeError("PrimitiveStoreSnapshot requires PrimitiveRootPayload")
-        self.__root = validated_root.model_dump(mode="json")
-
-    def get_anchor(self, anchor: AnchorRef | str, create: bool = False) -> dict | None:
-        """Return a detached anchor payload without revalidating the root."""
-        if create:
-            raise PrimitiveStoreError("PrimitiveStoreSnapshot is read-only")
-        anchor_ref = (
-            anchor if isinstance(anchor, AnchorRef) else AnchorRef.parse(anchor)
-        )
-        payload = self.__root["anchors"].get(anchor_ref.key())
-        return copy.deepcopy(payload) if payload is not None else None
-
-    def get_primitive(self, ref: PrimitiveRef | str, default: Any = None) -> Any:
-        """Return a detached primitive payload without revalidating the root."""
-        primitive_ref = (
-            ref if isinstance(ref, PrimitiveRef) else PrimitiveRef.parse(ref)
-        )
-        anchor = self.__root["anchors"].get(primitive_ref.anchor.key())
-        if anchor is None:
-            return default
-        payload = (
-            anchor["primitives"]
-            .get(primitive_ref.kind, {})
-            .get(primitive_ref.id, default)
-        )
-        return copy.deepcopy(payload)
-
-    def get_definition(self, kind: str, definition_id: str, default: Any = None) -> Any:
-        """Return a detached definition payload without revalidating the root."""
-        payload = self.__root["definitions"].get(kind, {}).get(definition_id, default)
-        return copy.deepcopy(payload)
-
-    def get_runtime(self, key: str, default: Any = None) -> Any:
-        """Return a detached runtime value without revalidating the root."""
-        return copy.deepcopy(self.__root["runtime"].get(key, default))
-
-    def iter_anchor_keys(self, kind: str | None = None) -> list[str]:
-        """Return canonical anchor keys without revalidating the root."""
-        keys = []
-        for key in self.__root["anchors"]:
-            anchor = AnchorRef.parse(key)
-            if kind is None or anchor.kind == kind:
-                keys.append(anchor.key())
-        return keys
-
-    def iter_primitives(self, anchor: AnchorRef | str, kind: str) -> dict[str, Any]:
-        """Return a detached primitive collection without revalidating the root."""
-        anchor_ref = (
-            anchor if isinstance(anchor, AnchorRef) else AnchorRef.parse(anchor)
-        )
-        payload = self.__root["anchors"].get(anchor_ref.key())
-        if payload is None:
-            return {}
-        return copy.deepcopy(payload["primitives"].get(kind, {}))

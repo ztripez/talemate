@@ -15,10 +15,11 @@ from talemate.game.primitives.conditions import (
 from talemate.game.primitives.effects import Effect, EffectResult, apply_effects
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
-from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
-from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
+from talemate.game.primitives.constants import GAME_PRIMITIVES_KEY
+from talemate.game.primitives.render import RenderPolicy
 
 if TYPE_CHECKING:
+    from talemate.game.primitives.store import PrimitiveStoreReader
     from talemate.scene_message import SceneMessage
     from talemate.tale_mate import Scene
 
@@ -37,7 +38,7 @@ class StorySceneDefinition(pydantic.BaseModel):
     local_anchors: list[str] = pydantic.Field(default_factory=list)
     entry_effects: list[Effect] = pydantic.Field(default_factory=list)
     exit_effects: list[Effect] = pydantic.Field(default_factory=list)
-    render_policy: Literal["hidden", "summary", "prompt"] = "prompt"
+    render_policy: RenderPolicy = "prompt"
 
     @pydantic.model_validator(mode="after")
     def validate_references(self) -> "StorySceneDefinition":
@@ -138,6 +139,54 @@ class AdventureState(pydantic.BaseModel):
     transition_log: list[TransitionLogEntry] = pydantic.Field(default_factory=list)
 
 
+def validate_adventure_runtime_compatibility(
+    state: AdventureState, definition: AdventureDefinition
+) -> list[str]:
+    """Return incompatibilities between retained state and an adventure graph.
+
+    Args:
+        state: Persisted active-adventure runtime to check.
+        definition: Candidate authored graph that must support the runtime.
+
+    Returns:
+        Deterministically ordered descriptions of missing scenes or incompatible
+        transition history; an empty list means the runtime remains compatible.
+
+    Raises:
+        None.
+
+    Side Effects:
+        None.
+
+    """
+    errors = []
+    scene_ids = set(definition.scenes)
+    for field, values in (
+        ("current story scene", [state.current_story_scene]),
+        ("visited story scene", state.visited),
+        ("completed story scene", state.completed),
+    ):
+        for value in values:
+            if value not in scene_ids:
+                errors.append(f"Active adventure {field} does not exist: {value}")
+    for entry in state.transition_log:
+        transition = definition.transitions.get(entry.transition_id)
+        if transition is None:
+            errors.append(
+                f"Active adventure transition does not exist: {entry.transition_id}"
+            )
+        elif (
+            transition.from_scene != entry.from_scene
+            or transition.to_scene != entry.to_scene
+            or transition.carry_anchors != entry.carry_anchors
+        ):
+            errors.append(
+                "Active adventure transition log is incompatible: "
+                f"{entry.transition_id}"
+            )
+    return errors
+
+
 class TransitionAvailability(pydantic.BaseModel):
     """Prompt-safe availability result for one outgoing transition."""
 
@@ -201,7 +250,10 @@ class AdventureEngine:
 
         Raises:
             PrimitiveError: If an adventure is active or a starting effect fails.
+
         """
+        from talemate.game.primitives.store import PrimitiveStore
+
         store = PrimitiveStore.for_scene(scene)
         if store.root["runtime"].get("adventure") is not None:
             raise PrimitiveError("An adventure is already active")
@@ -233,7 +285,10 @@ class AdventureEngine:
         """Return validated active adventure state without initializing storage."""
         if GAME_PRIMITIVES_KEY not in scene.game_state.variables:
             return None
-        store = store or PrimitiveStore.for_scene(scene)
+        if store is None:
+            from talemate.game.primitives.store import PrimitiveStore
+
+            store = PrimitiveStore.for_scene(scene)
         payload = store.get_runtime("adventure")
         return AdventureState.model_validate(payload) if payload is not None else None
 
@@ -331,6 +386,8 @@ class AdventureEngine:
 
         source = definition.scenes[state.current_story_scene]
         destination = definition.scenes[transition.to_scene]
+        from talemate.game.primitives.store import PrimitiveStore
+
         candidate_store = PrimitiveStore(
             copy.deepcopy(store.root), store.max_ledger_length
         )
@@ -451,7 +508,10 @@ class AdventureEngine:
         state = self.get_state(scene, store=store)
         if state is None:
             return None
-        store = store or PrimitiveStore.for_scene(scene)
+        if store is None:
+            from talemate.game.primitives.store import PrimitiveStore
+
+            store = PrimitiveStore.for_scene(scene)
         definition = self._definition(store, state.adventure_id)
         if state.current_story_scene not in definition.scenes:
             raise PrimitiveError(

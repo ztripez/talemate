@@ -15,7 +15,7 @@ from talemate.game.primitives.conditions import (
     evaluate_condition_input,
 )
 from talemate.game.primitives.effects import Effect, apply_effects
-from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
+from talemate.game.primitives.constants import GAME_PRIMITIVES_KEY
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
@@ -63,7 +63,7 @@ def test_effects_unset_append_extend_and_tags():
     """List effects and anchor tag effects use deterministic semantics."""
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
-    list_ref = "character:Model/decks/poses"
+    list_ref = "character:Model/lists/poses"
 
     result = apply_effects(
         store,
@@ -422,7 +422,7 @@ def test_effect_runtime_failures_do_not_mutate_or_append_effect_ledger():
         store,
         [
             {"op": "set", "target": "scene:main/values/tension", "value": "high"},
-            {"op": "set", "target": "scene:main/decks/poses", "value": "standing"},
+            {"op": "set", "target": "scene:main/lists/poses", "value": "standing"},
         ],
     )
     before = copy.deepcopy(store.root)
@@ -431,7 +431,7 @@ def test_effect_runtime_failures_do_not_mutate_or_append_effect_ledger():
         store, {"op": "inc", "target": "scene:main/values/tension", "by": 1}
     )
     append_result = apply_effects(
-        store, {"op": "append", "target": "scene:main/decks/poses", "value": "seated"}
+        store, {"op": "append", "target": "scene:main/lists/poses", "value": "seated"}
     )
 
     assert inc_result.ok is False

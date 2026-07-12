@@ -53,14 +53,35 @@ def validate_template(
     handler: pydantic.ValidatorFunctionWrapHandler,
     info: pydantic.ValidationInfo,
 ):
-    if isinstance(v, dict):
-        if v["template_type"] not in MODELS:
-            raise ValueError(f"Template type {v['template_type']} is not registered")
-        return MODELS[v["template_type"]](**v)
-    elif isinstance(v, Template):
-        if v.template_type not in MODELS:
-            raise ValueError(f"Template type {v.template_type} is not registered")
-        return v
+    """Validate a template through its registered concrete model.
+
+    Dictionary and :class:`Template` inputs must declare a ``template_type``
+    present in the module registry. They are validated by that registry entry,
+    preserving the concrete template type and all of its strict invariants.
+    Other inputs are delegated unchanged to Pydantic's wrapped validator.
+
+    Args:
+        v: Candidate template value.
+        handler: Wrapped Pydantic validator used for non-template-shaped values.
+        info: Pydantic validation context for this field. The dispatcher does not
+            inspect it.
+
+    Returns:
+        The concrete registered template for dictionary or template input, or the
+        wrapped validator's result for any other input.
+
+    Raises:
+        ValueError: The input is a dictionary or template whose ``template_type``
+            is absent from the registry, or concrete template validation fails.
+        pydantic.ValidationError: The registered model or wrapped validator rejects
+            the value.
+
+    """
+    if isinstance(v, dict | Template):
+        template_type = v.get("template_type") if isinstance(v, dict) else v.template_type
+        if template_type not in MODELS:
+            raise ValueError(f"Template type {template_type} is not registered")
+        return MODELS[template_type].model_validate(v)
     return handler(v)
 
 
@@ -113,6 +134,7 @@ AnnotatedTemplate = Annotated[TemplateType, pydantic.WrapValidator(validate_temp
 
 
 class Group(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid", strict=True)
     author: str
     name: str
     description: str
@@ -122,76 +144,34 @@ class Group(pydantic.BaseModel):
 
     @classmethod
     def load(cls, path: str) -> "Group":
+        """Load one strictly validated template group from a YAML file.
+
+        The YAML document must be a mapping accepted by ``cls`` with no unknown
+        group fields or coercion. Every template mapping is dispatched by its
+        registered ``template_type`` and must satisfy that concrete model's strict
+        contract. The supplied filesystem path is injected as ``path`` and is the
+        canonical save location on the returned group; a YAML ``path`` key is not
+        permitted because it would collide with this injected value.
+
+        Args:
+            path: Path to the YAML document containing exactly one group mapping.
+
+        Returns:
+            A strictly validated group whose ``path`` is the supplied path.
+
+        Raises:
+            OSError: The YAML file cannot be opened or read.
+            yaml.YAMLError: The file is not valid YAML.
+            TypeError: The YAML document is not a mapping, or contains a ``path``
+                key that conflicts with the injected canonical path.
+            ValueError: A template declares an unregistered ``template_type``.
+            pydantic.ValidationError: The group or a registered concrete template
+                violates its strict schema.
+
+        """
         with open(path, "r") as f:
             data = yaml.safe_load(f)
-            data = cls.sanitize_data(data)
-            return cls(path=path, **data)
-
-    @classmethod
-    def sanitize_data(cls, data: dict) -> dict:
-        """
-        Sanitizes the data for the group.
-        """
-
-        data.pop("path", None)
-
-        # ensure uid is set
-        if not data.get("uid"):
-            data["uid"] = str(uuid.uuid4())
-
-        # if group name is null, set it to the group uid
-        if not data.get("name"):
-            uid = data.get("uid")
-            log.warning("Group has no name", group_uid=uid)
-            data["name"] = uid[:8]
-
-        # if description or author are null, set them to blank strings
-        if data.get("description") is None:
-            data["description"] = ""
-        if data.get("author") is None:
-            data["author"] = ""
-
-        # 1 remove null templates
-        for template_id, template in list(data["templates"].items()):
-            if not template:
-                log.warning("Template is null", template_id=template_id)
-                del data["templates"][template_id]
-
-        # for templates with a null name, set it to the template_id
-        for template_id, template in data["templates"].items():
-            if template.get("group") != data["uid"]:
-                template["group"] = data["uid"]
-
-            if not template.get("uid"):
-                template["uid"] = template_id
-
-            if not template.get("name"):
-                log.warning("Template has no name", template_id=template_id)
-                template["name"] = template_id[:8]
-
-            # try to int priority, on failure set to 1
-            try:
-                template["priority"] = int(template.get("priority", 1))
-            except (ValueError, TypeError):
-                template["priority"] = 1
-
-        # ensure template_type exists and drop any that are invalid
-        for template_id, template in list(data["templates"].items()):
-            template_type = template.get("template_type")
-            if not template_type:
-                log.warning("Template has no template_type", template_id=template_id)
-                del data["templates"][template_id]
-                continue
-
-            if template_type not in MODELS:
-                log.warning(
-                    "Template has invalid template_type",
-                    template_id=template_id,
-                    template_type=template_type,
-                )
-                del data["templates"][template_id]
-
-        return data
+            return cls.model_validate({**data, "path": path}, strict=True)
 
     @property
     def filename(self):

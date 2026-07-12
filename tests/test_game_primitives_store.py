@@ -21,11 +21,12 @@ from talemate.game.primitives import (
     relationship_anchor,
     scene_anchor,
 )
+from talemate.game.primitives.constants import CURRENT_VERSION, GAME_PRIMITIVES_KEY
 from talemate.game.primitives.schema import (
-    CURRENT_VERSION,
-    GAME_PRIMITIVES_KEY,
+    default_anchor,
     default_root,
 )
+from talemate.game.primitives.store_snapshot import PrimitiveStoreSnapshot
 from talemate.tale_mate import Scene
 
 
@@ -154,6 +155,8 @@ def test_read_snapshot_is_validated_and_detached_from_mutable_state():
         {"id": "danger", "value": 2, "min": 0, "max": 5},
     )
     snapshot = PrimitiveStore.read_snapshot_for_scene(scene)
+
+    assert isinstance(snapshot, PrimitiveStoreSnapshot)
 
     returned = snapshot.get_primitive("scene:main/meters/danger")
     returned["value"] = 4
@@ -393,6 +396,67 @@ def test_store_definition_key_must_match_typed_model_id():
         )
 
     assert store.get_definition("meters", "focus") is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "primitive_id", "value"),
+    [
+        ("decks", "cards", {}),
+        (
+            "attributes",
+            "focus",
+            {"id": "attention", "source": "literal", "value": 1},
+        ),
+        (
+            "modifiers",
+            "bonus",
+            {"id": "penalty", "applies_to": "checks", "add": 1},
+        ),
+    ],
+)
+def test_store_rejects_malformed_known_primitive_writes(kind, primitive_id, value):
+    """Known primitive kinds use canonical models and key/id invariants."""
+    store = PrimitiveStore.for_scene(Scene())
+
+    with pytest.raises(PrimitiveStoreError):
+        store.set_primitive(f"scene:main/{kind}/{primitive_id}", value)
+
+    assert store.get_primitive(f"scene:main/{kind}/{primitive_id}") is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        ("decks", {}),
+        (
+            "attributes",
+            {"id": "other", "source": "literal", "value": 1},
+        ),
+        (
+            "modifiers",
+            {"id": "other", "applies_to": "checks", "add": 1},
+        ),
+    ],
+)
+def test_store_rejects_malformed_known_primitive_payloads_in_root(kind, value):
+    """Persisted anchors cannot bypass canonical kind-model validation."""
+    scene = Scene()
+    root = default_root()
+    root["anchors"]["scene:main"] = default_anchor()
+    root["anchors"]["scene:main"]["primitives"][kind]["target"] = value
+    scene.game_state.variables[GAME_PRIMITIVES_KEY] = root
+
+    with pytest.raises(PrimitiveStoreError, match="Invalid Game Primitives root"):
+        PrimitiveStore.for_scene(scene)
+
+
+def test_unknown_extension_primitive_payload_remains_generic():
+    """Extension kinds retain JSON-object persistence without a built-in model."""
+    store = PrimitiveStore.for_scene(Scene())
+
+    store.set_primitive("scene:main/custom/value", {"nested": [1, "two"]})
+
+    assert store.get_primitive("scene:main/custom/value") == {"nested": [1, "two"]}
 
 
 def test_store_rejects_non_json_primitive_payload_without_partial_write():

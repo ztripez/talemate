@@ -5,11 +5,11 @@ import copy
 import pytest
 
 from talemate.game.primitives.authoring import PrimitiveDraftStore
+from talemate.game.primitives.constants import GAME_PRIMITIVES_KEY
+from talemate.game.primitives.draft_schema import PrimitiveDraft
 from talemate.game.primitives.exceptions import PrimitiveStoreError
 from talemate.game.primitives.schema import (
-    GAME_PRIMITIVES_KEY,
     AnchorPayload,
-    PrimitiveDraft,
     PrimitiveRootPayload,
     default_root,
 )

@@ -23,12 +23,13 @@ from talemate.game.primitives.authoring.schema import (
     OptionalAnchoredDefinitionRequest,
 )
 from talemate.game.primitives.authoring.validator import PrimitiveDraftValidator
-from talemate.game.primitives.decks import DeckDefinition, DeckInstancePayload
-from talemate.game.primitives.roll_tables import (
-    RollTableDefinition,
-    RollTableInstancePayload,
+from talemate.game.primitives.deck_schema import DeckDefinition
+from talemate.game.primitives.deck_state import DeckInstancePayload
+from talemate.game.primitives.primitive_payloads import RollTableInstancePayload
+from talemate.game.primitives.roll_tables import RollTableDefinition
+from talemate.game.primitives.schema import (
+    AnchorPayload,
 )
-from talemate.game.primitives.schema import AnchorPayload
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
@@ -48,27 +49,41 @@ class PrimitiveAuthoringService:
         self.drafts = PrimitiveDraftStore()
         self.validator = PrimitiveDraftValidator()
 
-    def create_draft(self, scene: "Scene", draft_id: str | None = None):
+    def create_draft(
+        self,
+        scene: "Scene",
+        draft_id: str | None = None,
+        *,
+        created_by: str = "llm",
+        expected_revision: str,
+    ):
         """Create and persist an empty primitive authoring draft.
 
         Args:
             scene: Scene whose primitive root will store the draft.
             draft_id: Optional draft identifier; omitting the value generates a
                 unique identifier.
+            created_by: Non-empty creator identifier stored with the draft.
+            expected_revision: Exact primitive-root revision required before writing.
 
         Returns:
             A detached validated copy of the newly persisted draft.
 
         Raises:
-            PrimitiveStoreError: If the identifier already exists or persisted
-                primitive state is invalid.
+            PrimitiveStoreError: If a supplied revision is stale, the identifier
+                already exists, or persisted primitive state is invalid.
             pydantic.ValidationError: If the requested draft is invalid.
 
         Side Effects:
             Adds an empty draft to the scene's persisted primitive root.
 
         """
-        return self.drafts.create(scene, draft_id)
+        return self.drafts.create(
+            scene,
+            draft_id,
+            created_by=created_by,
+            expected_revision=expected_revision,
+        )
 
     def create_anchor(self, scene: "Scene", request: CreateAnchorRequest):
         """Stage anchor tags and metadata in an existing draft.
@@ -96,7 +111,11 @@ class PrimitiveAuthoringService:
         payload = draft.anchors.setdefault(anchor.key(), AnchorPayload())
         payload.tags = request.tags
         payload.meta = request.meta
-        return self.drafts.put(scene, draft)
+        return self.drafts.put(
+            scene,
+            draft,
+            expected_revision=request.expected_revision,
+        )
 
     def create_meter(self, scene: "Scene", request: CreateMeterRequest):
         """Stage a unique bounded meter under a draft anchor.
@@ -125,6 +144,7 @@ class PrimitiveAuthoringService:
             "meters",
             request.id,
             request.canonical_payload,
+            expected_revision=request.expected_revision,
         )
 
     def create_clock(self, scene: "Scene", request: CreateClockRequest):
@@ -154,6 +174,7 @@ class PrimitiveAuthoringService:
             "clocks",
             request.id,
             request.canonical_payload,
+            expected_revision=request.expected_revision,
         )
 
     def create_deck(self, scene: "Scene", request: CreateDeckRequest):
@@ -240,12 +261,19 @@ class PrimitiveAuthoringService:
         self._reject_duplicate(draft.anchors, "relationship anchor", anchor.key())
         draft = self.drafts.mark_changed(draft)
         payload = AnchorPayload(tags=request.tags)
-        payload.primitives["meters"] = {
-            dimension.id: dimension.to_meter_payload().model_dump(mode="json")
-            for dimension in request.dimensions
-        }
+        payload.primitives.set_collection(
+            "meters",
+            {
+                dimension.id: dimension.model_dump(mode="json")
+                for dimension in request.dimensions
+            },
+        )
         draft.anchors[anchor.key()] = payload
-        return self.drafts.put(scene, draft)
+        return self.drafts.put(
+            scene,
+            draft,
+            expected_revision=request.expected_revision,
+        )
 
     def create_modifier(self, scene: "Scene", request: CreateModifierRequest):
         """Stage a unique reusable roll modifier in a draft.
@@ -275,6 +303,7 @@ class PrimitiveAuthoringService:
             "modifier",
             request.id,
             request.canonical_payload,
+            expected_revision=request.expected_revision,
         )
 
     def create_attribute_source(
@@ -307,22 +336,30 @@ class PrimitiveAuthoringService:
             "attributes",
             request.id,
             request.canonical_payload,
+            expected_revision=request.expected_revision,
         )
 
-    def validate_draft(self, scene: "Scene", draft_id: str):
+    def validate_draft(
+        self,
+        scene: "Scene",
+        draft_id: str,
+        *,
+        expected_revision: str,
+    ):
         """Validate a persisted draft and save its latest validation outcome.
 
         Args:
             scene: Scene containing committed primitive state and the target draft.
             draft_id: Identifier of the persisted draft to validate.
+            expected_revision: Exact revision required before persisting validation.
 
         Returns:
             A detached copy of the draft with its validation outcome and lifecycle
             status updated.
 
         Raises:
-            PrimitiveStoreError: If the draft is missing, terminal, or persisted
-                primitive state is invalid.
+            PrimitiveStoreError: If a supplied revision is stale, the draft is
+                missing or terminal, or persisted primitive state is invalid.
 
         Side Effects:
             Persists validation errors and warnings and sets the draft status to
@@ -332,14 +369,25 @@ class PrimitiveAuthoringService:
         draft = self.drafts.get(scene, draft_id)
         draft.validation = self.validator.validate(scene, draft)
         draft.status = "validated" if draft.validation.ok else "draft"
-        return self.drafts.put(scene, draft)
+        return self.drafts.put(
+            scene,
+            draft,
+            expected_revision=expected_revision,
+        )
 
-    def commit_draft(self, scene: "Scene", draft_id: str):
+    def commit_draft(
+        self,
+        scene: "Scene",
+        draft_id: str,
+        *,
+        expected_revision: str,
+    ):
         """Revalidate and atomically commit a persisted primitive draft.
 
         Args:
             scene: Scene whose committed primitive root receives staged content.
             draft_id: Identifier of the persisted draft to commit.
+            expected_revision: Exact revision required before commit.
 
         Returns:
             The committed draft record with staged definitions and anchors cleared.
@@ -351,20 +399,30 @@ class PrimitiveAuthoringService:
             pydantic.ValidationError: If candidate root validation fails.
 
         Side Effects:
-            On success, atomically installs staged content and marks the persisted
-            draft committed. On validation failure, persists the failed validation
-            result before re-raising the error.
+            On success, atomically installs the complete validated candidate,
+            including explicit replacements and deletions, and marks the persisted
+            draft committed. Stale revisions, validation failures, and replacement
+            failures leave persisted state unchanged; failed validation mutates only
+            the detached draft used by this call.
 
         """
+        self.drafts.require_revision(scene, expected_revision)
         draft = self.drafts.get(scene, draft_id)
         try:
             return self.validator.commit(scene, draft)
         except ValueError:
-            self.drafts.put(scene, draft)
             raise
 
     def _set_primitive(
-        self, scene, draft_id, anchor, kind, primitive_id, primitive_payload
+        self,
+        scene,
+        draft_id,
+        anchor,
+        kind,
+        primitive_id,
+        primitive_payload,
+        *,
+        expected_revision: str,
     ):
         draft = self.drafts.get(scene, draft_id)
         anchor_ref = AnchorRef.parse(anchor)
@@ -373,8 +431,12 @@ class PrimitiveAuthoringService:
         self._reject_duplicate(existing, kind[:-1], primitive_id)
         draft = self.drafts.mark_changed(draft)
         payload = draft.anchors.setdefault(anchor_ref.key(), AnchorPayload())
-        payload.primitives.setdefault(kind, {})[primitive_id] = primitive_payload
-        return self.drafts.put(scene, draft)
+        payload.primitives.set_item(kind, primitive_id, primitive_payload)
+        return self.drafts.put(
+            scene,
+            draft,
+            expected_revision=expected_revision,
+        )
 
     def _set_definition(
         self,
@@ -386,6 +448,7 @@ class PrimitiveAuthoringService:
         definition_payload,
         *,
         instance: tuple[PrimitiveRef, dict] | None = None,
+        expected_revision: str,
     ):
         draft = self.drafts.get(scene, draft_id)
         definitions = draft.definitions.get(kind, {})
@@ -396,14 +459,18 @@ class PrimitiveAuthoringService:
             primitives = anchor.primitives.get(kind, {}) if anchor else {}
             self._reject_duplicate(primitives, category, instance_ref.id)
         draft = self.drafts.mark_changed(draft)
-        draft.definitions.setdefault(kind, {})[definition_id] = definition_payload
+        draft.definitions.set_item(kind, definition_id, definition_payload)
         if instance is not None:
             instance_ref, payload = instance
             anchor = draft.anchors.setdefault(
                 instance_ref.anchor.key(), AnchorPayload()
             )
-            anchor.primitives.setdefault(kind, {})[instance_ref.id] = payload
-        return self.drafts.put(scene, draft)
+            anchor.primitives.set_item(kind, instance_ref.id, payload)
+        return self.drafts.put(
+            scene,
+            draft,
+            expected_revision=expected_revision,
+        )
 
     def _set_optional_anchored_definition(
         self,
@@ -428,6 +495,7 @@ class PrimitiveAuthoringService:
             request.id,
             request.canonical_payload,
             instance=instance,
+            expected_revision=request.expected_revision,
         )
 
     @staticmethod

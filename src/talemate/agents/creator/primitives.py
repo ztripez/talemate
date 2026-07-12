@@ -17,6 +17,7 @@ from talemate.game.primitives.authoring.planner import (
     PrimitiveScenarioPlan,
 )
 from talemate.game.primitives.authoring.tools import PrimitiveAuthoringService
+from talemate.game.primitives.store import PrimitiveStore
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.prompts import Prompt
 
@@ -57,6 +58,7 @@ class ScenarioPrimitiveCreatorMixin:
         Raises:
             pydantic.ValidationError: If extracted data violates the plan schema.
             Exception: If the prompt request fails.
+
         """
         _, extracted = await Prompt.request(
             "creator.primitive-plan",
@@ -105,6 +107,7 @@ class ScenarioPrimitiveCreatorMixin:
             drafts are committed only when ``auto_commit`` is true; otherwise they remain
             inspectable as drafts. Drafts that fail validation also remain persisted and
             inspectable without changing committed primitive definitions or anchors.
+
         """
         target_scene = scene or getattr(self, "scene", None)
         draft_id = None
@@ -127,7 +130,12 @@ class ScenarioPrimitiveCreatorMixin:
                 )
 
             service = PrimitiveAuthoringService()
-            draft = service.create_draft(target_scene)
+            draft = service.create_draft(
+                target_scene,
+                expected_revision=PrimitiveStore.read_snapshot_for_scene(
+                    target_scene
+                ).revision_token(),
+            )
             draft_id = draft.id
             callbacks = [
                 callback
@@ -157,13 +165,25 @@ class ScenarioPrimitiveCreatorMixin:
                 for call in focal_handler.state.calls
                 if call.error
             ]
-            validated = service.validate_draft(target_scene, draft.id)
+            validated = service.validate_draft(
+                target_scene,
+                draft.id,
+                expected_revision=PrimitiveStore.read_snapshot_for_scene(
+                    target_scene
+                ).revision_token(),
+            )
             warnings = list(validated.validation.warnings)
             errors = [*call_errors, *validated.validation.errors]
             valid = validated.validation.ok and not call_errors
             committed = False
             if valid and auto_commit:
-                service.commit_draft(target_scene, draft.id)
+                service.commit_draft(
+                    target_scene,
+                    draft.id,
+                    expected_revision=PrimitiveStore.read_snapshot_for_scene(
+                        target_scene
+                    ).revision_token(),
+                )
                 committed = True
             report = PrimitiveDraftReport.from_draft(validated, committed=committed)
 

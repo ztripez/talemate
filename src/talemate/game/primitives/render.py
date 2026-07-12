@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-RenderPolicy = Literal["hidden", "prompt", "summary", "memory"]
+RENDER_POLICIES = ("hidden", "prompt", "summary", "memory")
+RenderPolicy = Literal[*RENDER_POLICIES]
 """Visibility policy controlling how primitive values appear in generated text.
 
 Policy values:

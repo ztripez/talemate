@@ -8,7 +8,8 @@ import pydantic
 from talemate.context import active_scene
 from talemate.game.engine.nodes.core import Node
 from talemate.game.primitives.authoring.tools import PrimitiveAuthoringService
-from talemate.game.primitives.schema import PrimitiveDraft
+from talemate.game.primitives.draft_schema import PrimitiveDraft
+from talemate.game.primitives.store import PrimitiveStore
 
 
 class CreateDraftRequest(pydantic.BaseModel):
@@ -88,3 +89,8 @@ def authoring_service() -> PrimitiveAuthoringService:
 
     """
     return PrimitiveAuthoringService()
+
+
+def current_revision() -> str:
+    """Return the exact primitive revision for the active scene."""
+    return PrimitiveStore.read_snapshot_for_scene(active_scene.get()).revision_token()

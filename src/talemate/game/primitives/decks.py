@@ -1,26 +1,33 @@
-"""Stateful card-deck primitives for deterministic scene gameplay.
-
-Deck primitives are JSON-serializable selection sources persisted in a Talemate
-scene's Game Primitives store. The models in this module define authored deck
-content, per-instance runtime state, draw options, debug payloads, and
-``DeckEngine`` operations that draw cards, update runtime state, and record deck
-ledger entries.
-"""
+"""Runtime engine for deterministic stateful card-deck primitives."""
 
 from __future__ import annotations
 
 import copy
 import random
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
-from talemate.game.primitives.conditions import (
-    PrimitiveConditionGroup,
-    conditions_match,
+from talemate.game.primitives.conditions import conditions_match
+from talemate.game.primitives.deck_schema import (
+    DeckCard,
+    DeckDebug,
+    DeckDefinition,
+    DeckDrawOptions,
+    DeckDrawRequest,
+    DeckLedgerInput,
+    DeckLedgerOutput,
+    DeckPeekResult,
+    DeckRuntimeState,
+    validate_deck_runtime_compatibility,
 )
-from talemate.game.primitives.effects import Effect, apply_effects
+from talemate.game.primitives.deck_state import (
+    DeckInstancePayload,
+    initial_deck_state as _initial_state,
+    shuffled_deck_ids as _shuffled_ids,
+)
+from talemate.game.primitives.effects import apply_effects
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.selection import SelectionResult
@@ -29,360 +36,27 @@ from talemate.game.primitives.store import PrimitiveStore
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
 
-
-class DeckCard(pydantic.BaseModel):
-    """JSON-serializable card definition used by deck selection.
-
-    Attributes:
-        id: Unique non-empty card identifier within one deck definition.
-        label: Human-readable non-empty label returned in selection results.
-        text: Optional narrative text returned with the selected card.
-        weight: Positive numeric selection weight used by weighted modes.
-        tags: Tag strings used by include and exclude draw filters.
-        variables: JSON-compatible values copied into the selection result.
-        effects: Primitive effects optionally applied after selection.
-        conditions: Condition groups that must match before the card can draw.
-        cooldown_turns: Non-negative later draws that exclude the card.
-        unique: Whether selecting the card exhausts it for the deck instance.
-    """
-
-    model_config = pydantic.ConfigDict(
-        extra="forbid", allow_inf_nan=False, str_strip_whitespace=True
-    )
-
-    id: str = pydantic.Field(min_length=1)
-    label: str = pydantic.Field(min_length=1)
-    text: str | None = None
-    weight: pydantic.StrictInt | pydantic.StrictFloat = 1
-    tags: list[str] = pydantic.Field(default_factory=list)
-    variables: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-    effects: list[Effect] = pydantic.Field(default_factory=list)
-    conditions: list[PrimitiveConditionGroup] = pydantic.Field(default_factory=list)
-    cooldown_turns: pydantic.StrictInt | None = None
-    unique: bool = False
-
-    @pydantic.model_validator(mode="after")
-    def validate_card_rules(self) -> "DeckCard":
-        """Validate deck-card weight and cooldown invariants.
-
-        Returns:
-            The validated deck card model.
-
-        Raises:
-            ValueError: If ``weight`` is not positive or ``cooldown_turns`` is
-                negative.
-        """
-        if self.weight <= 0:
-            raise ValueError("Deck card weight must be > 0")
-        if self.cooldown_turns is not None and self.cooldown_turns < 0:
-            raise ValueError("Deck card cooldown_turns must be >= 0")
-        return self
-
-
-class DeckDefinition(pydantic.BaseModel):
-    """JSON-serializable deck definition for stateful card selection.
-
-    Attributes:
-        id: Stable non-empty deck identifier.
-        name: Human-readable non-empty deck name.
-        mode: Selection mode controlling replacement and runtime state behavior.
-        shuffle: Shuffle strategy used for draw piles.
-        reshuffle: Exhaustion policy for draw-pile modes.
-        cards: Non-empty list of uniquely identified cards.
-        tags: Metadata tags associated with the deck.
-        variables: JSON-compatible metadata associated with the deck.
-    """
-
-    model_config = pydantic.ConfigDict(
-        extra="forbid", allow_inf_nan=False, str_strip_whitespace=True
-    )
-
-    id: str = pydantic.Field(min_length=1)
-    name: str = pydantic.Field(min_length=1)
-    mode: Literal["sample", "draw", "bag", "physical"] = "bag"
-    shuffle: Literal["seeded", "random"] = "seeded"
-    reshuffle: Literal["never", "when_empty"] = "when_empty"
-    cards: list[DeckCard]
-    tags: list[str] = pydantic.Field(default_factory=list)
-    variables: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-
-    @pydantic.model_validator(mode="after")
-    def validate_deck_rules(self) -> "DeckDefinition":
-        """Validate cards and unique card ids.
-
-        Returns:
-            The validated deck definition model.
-
-        Raises:
-            ValueError: If the deck has no cards or card ids are duplicated.
-        """
-        if not self.cards:
-            raise ValueError("Deck requires at least one card")
-        ids = [card.id for card in self.cards]
-        if len(ids) != len(set(ids)):
-            raise ValueError("Deck card ids must be unique")
-        return self
-
-
-class DeckRuntimeState(pydantic.BaseModel):
-    """Persisted runtime state for one deck primitive instance.
-
-    The runtime stores draw piles, discard piles, recent draws, cooldowns, and a
-    deterministic draw counter for one anchored deck primitive.
-
-    Attributes:
-        definition_id: Deck definition id used to initialize the state.
-        mode: Deck mode copied from the definition.
-        draw_pile: Ordered card ids available to draw-pile modes.
-        discard: Card ids already drawn from draw-pile modes.
-        recent: Recent card ids used by avoid-recent filtering.
-        cooldowns: Non-negative remaining cooldown turns keyed by card id.
-        exhausted: Unique card ids no longer available to this instance.
-        draw_count: Non-negative number of completed draws.
-        seed: Optional deterministic seed for shuffle operations.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    definition_id: str = pydantic.Field(min_length=1)
-    mode: Literal["sample", "draw", "bag", "physical"]
-    draw_pile: list[str] = pydantic.Field(default_factory=list)
-    discard: list[str] = pydantic.Field(default_factory=list)
-    recent: list[str] = pydantic.Field(default_factory=list)
-    cooldowns: dict[str, pydantic.NonNegativeInt] = pydantic.Field(default_factory=dict)
-    exhausted: list[str] = pydantic.Field(default_factory=list)
-    draw_count: pydantic.NonNegativeInt = 0
-    seed: str | None = None
-
-
-class DeckDrawOptions(pydantic.BaseModel):
-    """Validated deck draw options.
-
-    ``context`` is trace metadata copied into debug and ledger output; it does
-    not affect card filtering or selection.
-
-    Attributes:
-        include_tags: Tags every drawable card must contain.
-        exclude_tags: Tags drawable cards must not contain.
-        avoid_recent: Optional non-negative count of recent card ids to avoid.
-        context: JSON-compatible trace metadata copied to debug and ledger data.
-        apply_effects: Whether selected card effects should run immediately.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    include_tags: list[str] = pydantic.Field(default_factory=list)
-    exclude_tags: list[str] = pydantic.Field(default_factory=list)
-    avoid_recent: pydantic.StrictInt | None = None
-    context: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-    apply_effects: pydantic.StrictBool = False
-
-    @pydantic.model_validator(mode="after")
-    def validate_options(self) -> "DeckDrawOptions":
-        """Validate draw option constraints.
-
-        Returns:
-            The validated draw options model.
-
-        Raises:
-            ValueError: If ``avoid_recent`` is negative.
-        """
-        if self.avoid_recent is not None and self.avoid_recent < 0:
-            raise ValueError("avoid_recent must be >= 0")
-        return self
-
-
-class DeckDrawRequest(pydantic.BaseModel):
-    """Validated graph/runtime request for drawing from a deck.
-
-    Attributes:
-        deck: Deck definition payload/model or deck reference string.
-        anchor: Optional anchor for resolving definition-id runtime instances.
-        instance_id: Optional primitive id for the runtime deck instance.
-        include_tags: Tags every drawable card must contain.
-        exclude_tags: Tags drawable cards must not contain.
-        avoid_recent: Optional non-negative count of recent card ids to avoid.
-        context: JSON-compatible trace metadata copied to debug and ledger data.
-        apply_effects: Whether selected card effects should run immediately.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    deck: DeckDefinition | str
-    anchor: str | None = None
-    instance_id: str | None = None
-    include_tags: list[str] = pydantic.Field(default_factory=list)
-    exclude_tags: list[str] = pydantic.Field(default_factory=list)
-    avoid_recent: pydantic.StrictInt | None = None
-    context: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-    apply_effects: pydantic.StrictBool = False
-
-    def options(self) -> DeckDrawOptions:
-        """Return validated draw options from request fields.
-
-        Returns:
-            Draw options copied from this request.
-
-        Raises:
-            pydantic.ValidationError: If copied option fields are invalid.
-        """
-        return DeckDrawOptions.model_validate(
-            {
-                "include_tags": self.include_tags,
-                "exclude_tags": self.exclude_tags,
-                "avoid_recent": self.avoid_recent,
-                "context": self.context,
-                "apply_effects": self.apply_effects,
-            }
-        )
-
-
-class DeckDebug(pydantic.BaseModel):
-    """Validated deck draw debug payload.
-
-    Attributes:
-        mode: Deck mode used for the draw.
-        candidates: Candidate card ids before filters.
-        filtered: Candidate card ids after filters.
-        relaxed_avoid_recent: Whether avoid-recent filtering was relaxed.
-        draw_pile: Runtime draw pile after candidate computation.
-        discard: Runtime discard pile after candidate computation.
-        recent: Recent card ids before the selected card is appended.
-        cooldowns: Active cooldowns before selected-card state updates.
-        context: JSON-compatible trace metadata.
-        applied_effects: Optional effect-application result payload.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    mode: str
-    candidates: list[str]
-    filtered: list[str]
-    relaxed_avoid_recent: bool = False
-    draw_pile: list[str] = pydantic.Field(default_factory=list)
-    discard: list[str] = pydantic.Field(default_factory=list)
-    recent: list[str] = pydantic.Field(default_factory=list)
-    cooldowns: dict[str, int] = pydantic.Field(default_factory=dict)
-    context: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-    applied_effects: dict[str, pydantic.JsonValue] | None = None
-
-
-class DeckInstancePayload(pydantic.BaseModel):
-    """Validated persisted payload for one deck primitive instance.
-
-    Attributes:
-        definition: Stored deck definition id.
-        runtime: Persisted runtime state for this deck instance.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    definition: str = pydantic.Field(min_length=1)
-    runtime: DeckRuntimeState
-
-    @pydantic.model_validator(mode="after")
-    def validate_definition_id(self) -> "DeckInstancePayload":
-        """Require the runtime state to belong to the referenced definition."""
-        if self.runtime.definition_id != self.definition:
-            raise ValueError(
-                "Deck runtime definition_id "
-                f"'{self.runtime.definition_id}' must match definition "
-                f"'{self.definition}'"
-            )
-        return self
-
-    @classmethod
-    def create(
-        cls, definition: DeckDefinition, ref: PrimitiveRef | str
-    ) -> "DeckInstancePayload":
-        """Create canonical initial state for an anchored deck instance.
-
-        Args:
-            definition: Deck definition used to initialize the instance.
-            ref: Primitive reference whose canonical key seeds the runtime state.
-
-        Returns:
-            A canonical instance payload referencing the supplied definition.
-
-        Raises:
-            pydantic.ValidationError: If ``ref`` is not a valid primitive reference.
-        """
-        instance_ref = PrimitiveRef.model_validate(ref)
-        return cls(
-            definition=definition.id,
-            runtime=_initial_state(definition, instance_ref.key()),
-        )
-
-
-class DeckPeekResult(pydantic.BaseModel):
-    """Validated output returned when inspecting a deck instance.
-
-    Attributes:
-        source_type: Constant source type, always ``"deck"``.
-        source_id: Deck definition id.
-        ref: Primitive reference for the runtime deck instance.
-        runtime: Current runtime state for the deck instance.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    source_type: Literal["deck"] = "deck"
-    source_id: str
-    ref: str
-    runtime: DeckRuntimeState
-
-
-class DeckLedgerInput(pydantic.BaseModel):
-    """Validated deck draw ledger input payload.
-
-    Attributes:
-        include_tags: Tags required by the draw request.
-        exclude_tags: Tags excluded by the draw request.
-        avoid_recent: Recent-card avoidance window requested by the draw.
-        context: JSON-compatible trace metadata supplied by the caller.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    include_tags: list[str] = pydantic.Field(default_factory=list)
-    exclude_tags: list[str] = pydantic.Field(default_factory=list)
-    avoid_recent: int | None = None
-    context: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-
-
-class DeckLedgerOutput(pydantic.BaseModel):
-    """Validated deck draw ledger output payload.
-
-    Attributes:
-        card_id: Selected card id.
-        mode: Deck mode used for selection.
-        candidate_count: Number of candidates before filtering.
-        filtered_count: Number of candidates after filtering.
-    """
-
-    model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
-
-    card_id: str
-    mode: str
-    candidate_count: int
-    filtered_count: int
+__all__ = [
+    "DeckCard",
+    "DeckDebug",
+    "DeckDefinition",
+    "DeckDrawOptions",
+    "DeckDrawRequest",
+    "DeckEngine",
+    "DeckInstancePayload",
+    "DeckLedgerInput",
+    "DeckLedgerOutput",
+    "DeckPeekResult",
+    "DeckRuntimeState",
+    "validate_deck_runtime_compatibility",
+]
 
 
 class DeckEngine:
-    """Stateful deck resolver for Talemate scenes.
-
-    The engine resolves inline deck definitions, stored definition ids, and deck
-    primitive references. Draw operations persist runtime state and append deck
-    ledger entries through ``PrimitiveStore``.
-    """
+    """Stateful deck resolver for Talemate scenes."""
 
     def __init__(self, rng: random.Random | None = None):
-        """Create a deck engine with an optional random source.
-
-        Args:
-            rng: Random source implementing ``random`` for weighted sample and
-                bag selections. When omitted, a new ``random.Random`` is used.
-        """
+        """Create a deck engine with an optional random source."""
         self.rng = rng if rng is not None else random.Random()
 
     def draw(
@@ -394,30 +68,7 @@ class DeckEngine:
         instance_id: str | None = None,
         options: DeckDrawOptions | dict | None = None,
     ) -> SelectionResult:
-        """Draw one card, persist runtime state, and append a deck ledger entry.
-
-        Args:
-            scene: Talemate scene containing the Game Primitives store.
-            deck: Deck definition object, dictionary, stored definition id, or
-                full deck primitive reference string.
-            anchor: Optional anchor used for definition-id runtime instances.
-            instance_id: Optional deck primitive id. Defaults to the definition id.
-            options: Optional draw filters and effect-application options.
-
-        Returns:
-            Selection result containing selected card data, copied variables,
-            copied effects, and deck debug metadata.
-
-        Raises:
-            PrimitiveError: If the deck cannot be resolved, persisted runtime is
-                invalid, no card is drawable, RNG output is invalid, or requested
-                card effects fail.
-            pydantic.ValidationError: If deck data or draw options are invalid.
-
-        Side Effects:
-            Persists deck runtime state, appends a ``deck.draw`` ledger entry,
-            and applies card effects when ``options.apply_effects`` is true.
-        """
+        """Draw one card, persist runtime state, and append a ledger entry."""
         draw_options = DeckDrawOptions.model_validate(
             {} if options is None else options
         )
@@ -482,24 +133,7 @@ class DeckEngine:
         anchor: AnchorRef | str | None = None,
         instance_id: str | None = None,
     ) -> dict[str, pydantic.JsonValue]:
-        """Return the current runtime state without drawing.
-
-        Args:
-            scene: Talemate scene containing the Game Primitives store.
-            deck: Deck definition object, dictionary, definition id, or primitive
-                reference to inspect.
-            anchor: Optional anchor used for definition-id runtime instances.
-            instance_id: Optional deck primitive id.
-
-        Returns:
-            JSON-compatible peek result containing source id, primitive ref, and
-            runtime state.
-
-        Raises:
-            PrimitiveError: If the deck cannot be resolved or persisted runtime
-                state is invalid.
-            pydantic.ValidationError: If deck data is invalid.
-        """
+        """Return the current runtime state without drawing."""
         store = PrimitiveStore.for_scene(scene)
         definition, ref, state = self._resolve_deck(store, deck, anchor, instance_id)
         return DeckPeekResult(
@@ -514,26 +148,7 @@ class DeckEngine:
         anchor: AnchorRef | str | None = None,
         instance_id: str | None = None,
     ) -> DeckRuntimeState:
-        """Shuffle the draw pile for a persisted deck instance.
-
-        Args:
-            scene: Talemate scene containing the Game Primitives store.
-            deck: Deck definition object, dictionary, definition id, or primitive
-                reference to shuffle.
-            anchor: Optional anchor used for definition-id runtime instances.
-            instance_id: Optional deck primitive id.
-
-        Returns:
-            Updated persisted runtime state after shuffling.
-
-        Raises:
-            PrimitiveError: If the deck cannot be resolved or persisted runtime
-                state is invalid.
-            pydantic.ValidationError: If deck data is invalid.
-
-        Side Effects:
-            Persists the shuffled runtime state in the Game Primitives store.
-        """
+        """Shuffle and persist the draw pile for a deck instance."""
         store = PrimitiveStore.for_scene(scene)
         definition, ref, state = self._resolve_deck(store, deck, anchor, instance_id)
         state.draw_pile = _shuffled_ids(
@@ -551,28 +166,9 @@ class DeckEngine:
         anchor: AnchorRef | str | None = None,
         instance_id: str | None = None,
     ) -> DeckRuntimeState:
-        """Reset a persisted deck instance to its initial runtime state.
-
-        Args:
-            scene: Talemate scene containing the Game Primitives store.
-            deck: Deck definition object, dictionary, definition id, or primitive
-                reference to reset.
-            anchor: Optional anchor used for definition-id runtime instances.
-            instance_id: Optional deck primitive id.
-
-        Returns:
-            Fresh runtime state for the deck instance.
-
-        Raises:
-            PrimitiveError: If the deck cannot be resolved or persisted runtime
-                state is invalid.
-            pydantic.ValidationError: If deck data is invalid.
-
-        Side Effects:
-            Persists the reset runtime state in the Game Primitives store.
-        """
+        """Reset and persist a deck instance's initial runtime state."""
         store = PrimitiveStore.for_scene(scene)
-        definition, ref, state = self._resolve_deck(store, deck, anchor, instance_id)
+        definition, ref, _state = self._resolve_deck(store, deck, anchor, instance_id)
         state = _initial_state(definition, ref.key())
         _persist_deck_state(store, ref, definition, state)
         return state
@@ -630,17 +226,6 @@ def _instance_ref(anchor: AnchorRef | str | None, instance_id: str) -> Primitive
     return PrimitiveRef(anchor=owner, kind="decks", id=instance_id)
 
 
-def _initial_state(definition: DeckDefinition, seed: str) -> DeckRuntimeState:
-    state = DeckRuntimeState(
-        definition_id=definition.id,
-        mode=definition.mode,
-        seed=seed,
-    )
-    if definition.mode in {"draw", "physical"}:
-        state.draw_pile = _shuffled_ids(definition, state)
-    return state
-
-
 def _runtime_for_ref(
     store: PrimitiveStore, ref: PrimitiveRef, definition: DeckDefinition
 ) -> DeckRuntimeState:
@@ -672,7 +257,6 @@ def _validate_runtime_state(
             f"Persisted deck runtime for {seed} has mode '{state.mode}', "
             f"expected '{definition.mode}'"
         )
-
     card_ids = {card.id for card in definition.cards}
     runtime_card_ids = (
         set(state.draw_pile)
@@ -720,10 +304,7 @@ def _persist_deck_state(
         definition=definition.id,
         runtime=state,
     ).model_dump(mode="json")
-    store.set_runtime_primitive(
-        ref,
-        payload,
-    )
+    store.set_runtime_primitive(ref, payload)
 
 
 def _mode_candidates(definition: DeckDefinition, state: DeckRuntimeState) -> list[str]:
@@ -841,29 +422,6 @@ def _selection_from_card(
         variables=copy.deepcopy(card.variables),
         debug=debug,
     )
-
-
-def _shuffled_ids(
-    definition: DeckDefinition,
-    state: DeckRuntimeState,
-    source: list[str] | None = None,
-    *,
-    preserve_physical_order: bool = True,
-) -> list[str]:
-    ids = list(source if source is not None else [card.id for card in definition.cards])
-    if (
-        preserve_physical_order
-        and definition.mode == "physical"
-        and state.draw_count == 0
-    ):
-        return ids
-    rng = (
-        random.Random(f"{state.seed}:{state.draw_count}")
-        if definition.shuffle == "seeded"
-        else random.Random()
-    )
-    rng.shuffle(ids)
-    return ids
 
 
 def _weighted_random(rng: random.Random, source_id: str) -> float:

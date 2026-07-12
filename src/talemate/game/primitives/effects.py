@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
+from talemate.game.primitives.constants import EFFECT_KINDS
 from talemate.game.primitives.definitions import MeterPayload
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
-from talemate.game.primitives.store import PrimitiveStore
 from talemate.game.primitives.values import (
     primitive_payload_value,
     primitive_value_payload,
 )
+
+if TYPE_CHECKING:
+    from talemate.game.primitives.store import PrimitiveStore
 
 
 class Effect(pydantic.BaseModel):
@@ -25,16 +28,7 @@ class Effect(pydantic.BaseModel):
         extra="forbid", allow_inf_nan=False, revalidate_instances="always"
     )
 
-    op: Literal[
-        "set",
-        "unset",
-        "inc",
-        "dec",
-        "add_tag",
-        "remove_tag",
-        "append",
-        "extend",
-    ]
+    op: Literal[*EFFECT_KINDS]
     target: str | None = None
     value: pydantic.JsonValue | None = None
     by: pydantic.StrictInt | pydantic.StrictFloat | None = None
@@ -94,6 +88,8 @@ def apply_effects(
         effect_store = store
     elif isinstance(effects, list):
         raw_effects = effects
+        from talemate.game.primitives.store import PrimitiveStore
+
         effect_store = PrimitiveStore(
             copy.deepcopy(store.root), store.max_ledger_length
         )

@@ -6,6 +6,7 @@ import pytest
 from _node_test_helpers import run_node
 
 import talemate.game.engine.nodes.load_definitions  # noqa: F401 - node registration side effects
+from talemate.character import Character
 from talemate.game.engine.nodes.registry import get_node
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
@@ -60,6 +61,12 @@ async def _run(scene, name, inputs):
 async def test_authoring_nodes_build_validate_and_commit_json_safe_draft():
     """Authoring nodes stage all supported payload types and commit after validation."""
     scene = Scene()
+    for name in ("Alice", "Bob"):
+        character = Character(name=name)
+        actor = scene.Actor(character, None)
+        actor.scene = scene
+        scene.actors.append(actor)
+        scene.character_data[name] = character
     draft = await _run(scene, "CreateDraft", {"draft_id": "node-draft"})
     assert draft["id"] == "node-draft"
 

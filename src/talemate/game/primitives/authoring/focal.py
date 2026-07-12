@@ -20,6 +20,7 @@ from talemate.game.primitives.authoring.schema import (
     DraftRequest,
 )
 from talemate.game.primitives.authoring.tools import PrimitiveAuthoringService
+from talemate.game.primitives.store import PrimitiveStore
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
@@ -188,7 +189,6 @@ class PrimitiveAuthoringFocal:
             root. Constructing the callback list does not mutate scene state.
 
         """
-
         return [self._callback(operation, scene, draft_id) for operation in _OPERATIONS]
 
     def _callback(
@@ -216,15 +216,30 @@ class PrimitiveAuthoringFocal:
         Side Effects:
             Invoking the callback may mutate the bound scene's draft or committed
             primitive state. Building the descriptor does not mutate scene state.
+
         """
 
         async def dispatch(**arguments: Any) -> dict[str, Any]:
+            expected_revision = PrimitiveStore.read_snapshot_for_scene(
+                scene
+            ).revision_token()
             request = operation.request_model.model_validate(
-                {"draft_id": draft_id, **arguments}
+                {
+                    "draft_id": draft_id,
+                    "expected_revision": expected_revision,
+                    **arguments,
+                }
             )
             service_argument = request.draft_id if operation.pass_draft_id else request
-            result = getattr(self.service, operation.service_method)(
-                scene, service_argument
+            method = getattr(self.service, operation.service_method)
+            result = (
+                method(
+                    scene,
+                    service_argument,
+                    expected_revision=request.expected_revision,
+                )
+                if operation.pass_draft_id
+                else method(scene, service_argument)
             )
             return result.model_dump(mode="json")
 

@@ -9,11 +9,15 @@ modifiers, clocks, or state references without writing to character prose fields
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import pydantic
 
 from talemate.game.primitives.anchors import PrimitiveRef
+from talemate.game.primitives.attribute_model import (
+    AttributeSource,
+    AttributeSourceKind,
+)
 from talemate.game.primitives.attribute_sources import (
     resolve_deck_source,
 )
@@ -33,13 +37,7 @@ from talemate.game.primitives.attribute_sources import (
 from talemate.game.primitives.attribute_sources import (
     validate_context as _validate_context,
 )
-from talemate.game.primitives.attribute_sources import (
-    validated_options as _validated_options,
-)
-from talemate.game.primitives.conditions import (
-    PrimitiveConditionGroup,
-    conditions_match,
-)
+from talemate.game.primitives.conditions import conditions_match
 from talemate.game.primitives.decks import DeckEngine
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.relationships import RelationshipGraph
@@ -55,85 +53,6 @@ from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
 
-AttributeSourceKind = Literal[
-    "literal",
-    "deck",
-    "roll_table",
-    "meter",
-    "clock",
-    "relationship",
-    "modifier",
-    "state_ref",
-]
-"""Deterministic source kind used to compute a primitive attribute value.
-
-Source values:
-    literal: Uses the source's inline JSON-compatible value.
-    deck: Draws from or peeks at a deck primitive.
-    roll_table: Rolls a roll-table primitive.
-    meter: Reads a meter primitive payload.
-    clock: Reads a clock primitive payload.
-    relationship: Reads or summarizes relationship primitive state.
-    modifier: Reads a roll modifier when its conditions match.
-    state_ref: Reads a slash-delimited path from scene game-state variables.
-"""
-
-
-class AttributeSource(pydantic.BaseModel):
-    """Persisted primitive attribute source definition.
-
-    Attributes:
-        id: Stable non-empty attribute identifier under one anchor.
-        label: Optional human-readable label used when rendering the attribute.
-        source: Deterministic source kind used to resolve the value.
-        render_policy: Visibility policy controlling prompt and memory rendering.
-        value: Literal JSON-compatible value for ``literal`` sources.
-        ref: Optional anchor, primitive, modifier, or state reference read by the
-            selected source kind.
-        options: JSON-compatible source-specific options.
-        conditions: Primitive condition groups that gate resolution.
-    """
-
-    model_config = pydantic.ConfigDict(
-        extra="forbid", allow_inf_nan=False, str_strip_whitespace=True
-    )
-
-    id: str = pydantic.Field(min_length=1)
-    label: str | None = None
-    source: AttributeSourceKind
-    render_policy: RenderPolicy = "hidden"
-    value: pydantic.JsonValue | None = None
-    ref: str | None = None
-    options: dict[str, pydantic.JsonValue] = pydantic.Field(default_factory=dict)
-    conditions: list[PrimitiveConditionGroup] = pydantic.Field(default_factory=list)
-
-    @pydantic.model_validator(mode="after")
-    def validate_source_contract(self) -> "AttributeSource":
-        """Validate source-specific reference and value requirements.
-
-        Returns:
-            The validated attribute source.
-
-        Raises:
-            ValueError: If the selected source kind lacks required data or has
-                invalid source-specific options.
-            pydantic.ValidationError: If source-specific options fail schema
-                validation.
-        """
-        if self.source == "literal":
-            if self.ref is not None:
-                raise ValueError("Literal attribute sources cannot define ref")
-            if "value" not in self.model_fields_set:
-                raise ValueError("Literal attribute sources require explicit value")
-            self.options = _validated_options(self)
-            return self
-        if "value" in self.model_fields_set:
-            raise ValueError("Non-literal attribute sources cannot define value")
-        if not self.ref or not self.ref.strip():
-            raise ValueError(f"Attribute source '{self.source}' requires ref")
-        self.options = _validated_options(self)
-        return self
-
 
 class AttributeResolution(pydantic.BaseModel):
     """Resolved primitive attribute value and render metadata.
@@ -146,6 +65,7 @@ class AttributeResolution(pydantic.BaseModel):
         rendered: Optional pre-rendered prompt-safe text from the source.
         render_policy: Visibility policy copied from the source definition.
         debug: JSON-compatible trace metadata explaining resolution.
+
     """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -164,6 +84,7 @@ class AttributeSetRequest(pydantic.BaseModel):
     Attributes:
         ref: Primitive reference whose kind must be ``attributes``.
         source: Attribute source payload to store at ``ref``.
+
     """
 
     model_config = pydantic.ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -188,6 +109,7 @@ class AttributeSetRequest(pydantic.BaseModel):
                 an attribute id for a source mapping.
             pydantic.ValidationError: If ``ref`` cannot be validated while deriving
                 a missing source id.
+
         """
         if not isinstance(value, dict):
             raise ValueError("Attribute set request must be a dictionary")
@@ -211,6 +133,7 @@ class AttributeSetRequest(pydantic.BaseModel):
         Raises:
             ValueError: If ``ref`` does not target the ``attributes`` primitive kind or
                 ``source.id`` does not match ``ref.id``.
+
         """
         _require_attribute_ref(self.ref)
         if self.source.id != self.ref.id:
@@ -239,6 +162,7 @@ class AttributeResolver:
             roll_table_engine: Roll table engine used for table-backed attributes.
             relationship_graph: Relationship graph used for relationship-backed
                 attributes.
+
         """
         self.deck_engine = deck_engine if deck_engine is not None else DeckEngine()
         self.roll_table_engine = (
@@ -268,6 +192,7 @@ class AttributeResolver:
             pydantic.ValidationError: If the source payload is invalid or
                 ``source.id`` does not match ``ref.id``.
             PrimitiveStoreError: If the primitive store rejects the payload.
+
         """
         primitive_ref = _coerce_attribute_ref(ref)
         request = AttributeSetRequest.model_validate(
@@ -307,6 +232,7 @@ class AttributeResolver:
                 store state is invalid.
             ValueError: If ``ref`` is not an attribute primitive reference.
             pydantic.ValidationError: If the stored source payload is invalid.
+
         """
         primitive_ref = _coerce_attribute_ref(ref)
         payload = (store or PrimitiveStore.for_scene(scene)).get_primitive(
@@ -342,6 +268,7 @@ class AttributeResolver:
             pydantic.ValidationError: If stored source or context payloads are invalid.
             ValueError: If ``ref`` is not an attribute primitive reference or condition
                 evaluation encounters invalid condition data.
+
         """
         primitive_ref = _coerce_attribute_ref(ref)
         source = self.get(scene, primitive_ref, store=store)
@@ -408,6 +335,7 @@ class AttributeResolver:
                 evaluation encounters invalid condition data, the render policy is
                 unsupported, or a visible attribute resolves to ``None`` without
                 pre-rendered text.
+
         """
         audience_value = _validate_audience(audience)
         primitive_ref = _coerce_attribute_ref(ref)
@@ -440,6 +368,7 @@ class AttributeResolver:
             ValueError: If the render policy is unsupported, or if a
                 visible attribute resolution has ``value=None`` without pre-rendered
                 text.
+
         """
         audience_value = _validate_audience(audience)
         if resolution.debug.get("active") is False:
@@ -479,6 +408,7 @@ class AttributeResolver:
                 engine cannot resolve the source.
             pydantic.ValidationError: If source-specific payloads or resolved values
                 are invalid.
+
         """
         if source.source == "literal":
             return copy.deepcopy(source.value), None, {"source": "literal"}

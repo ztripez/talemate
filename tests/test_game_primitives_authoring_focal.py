@@ -27,7 +27,13 @@ EXPECTED_CALLBACKS = {
 async def test_callbacks_bind_draft_and_return_json_serializable_dictionaries():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "focal-draft")
+    service.create_draft(
+        scene,
+        "focal-draft",
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
     callbacks = {
         callback.name: callback
         for callback in PrimitiveAuthoringFocal(service).callbacks(scene, "focal-draft")
@@ -123,7 +129,13 @@ async def test_callbacks_bind_draft_and_return_json_serializable_dictionaries():
 async def test_validate_and_commit_callbacks_use_bound_draft():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "bound")
+    service.create_draft(
+        scene,
+        "bound",
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
     callbacks = {
         callback.name: callback
         for callback in PrimitiveAuthoringFocal(service).callbacks(scene, "bound")
@@ -146,7 +158,13 @@ async def test_validate_and_commit_callbacks_use_bound_draft():
 async def test_callback_arguments_are_validated_by_request_models():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "invalid")
+    service.create_draft(
+        scene,
+        "invalid",
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
     callbacks = {
         callback.name: callback
         for callback in PrimitiveAuthoringFocal(service).callbacks(scene, "invalid")

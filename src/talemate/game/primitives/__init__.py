@@ -30,14 +30,14 @@ from talemate.game.primitives.context import (
     PrimitiveContextRenderer,
     PrimitiveRenderedContext,
 )
-from talemate.game.primitives.decks import (
+from talemate.game.primitives.deck_schema import (
     DeckCard,
     DeckDefinition,
     DeckDrawOptions,
-    DeckEngine,
-    DeckInstancePayload,
     DeckRuntimeState,
 )
+from talemate.game.primitives.deck_state import DeckInstancePayload
+from talemate.game.primitives.decks import DeckEngine
 from talemate.game.primitives.definitions import MeterPayload
 from talemate.game.primitives.effects import (
     Effect,
@@ -61,7 +61,6 @@ from talemate.game.primitives.relationships import (
 from talemate.game.primitives.roll_tables import (
     RollTableDefinition,
     RollTableEngine,
-    RollTableInstancePayload,
     RollTablePreviewRequest,
     RollTableRollRequest,
     RollTableRow,
@@ -100,7 +99,6 @@ __all__ = [
     "RelationshipGraph",
     "RollTableDefinition",
     "RollTableEngine",
-    "RollTableInstancePayload",
     "RollTablePreviewRequest",
     "RollTableRollRequest",
     "RollTableRow",

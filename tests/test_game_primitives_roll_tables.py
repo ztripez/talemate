@@ -14,12 +14,12 @@ import talemate.game.primitives.roll_tables as roll_table_primitives
 from talemate.context import ActiveScene
 from talemate.game.engine.nodes.registry import get_node
 from talemate.game.primitives.exceptions import PrimitiveError
+from talemate.game.primitives.primitive_payloads import RollTableInstancePayload
 from talemate.game.primitives.roll_tables import (
     MAX_DICE_COUNT,
     MAX_DICE_SIDES,
     RollTableDefinition,
     RollTableEngine,
-    RollTableInstancePayload,
     _range_gaps,
     parse_dice,
     parse_range,

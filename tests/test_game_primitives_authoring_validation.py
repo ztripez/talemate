@@ -16,15 +16,20 @@ from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
 
+def _revision(scene: Scene) -> str:
+    return PrimitiveStore.read_snapshot_for_scene(scene).revision_token()
+
+
 def test_missing_attribute_reference_blocks_commit_without_mutating_store():
     """Reference validation prevents invalid drafts from changing committed state."""
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "bad")
+    service.create_draft(scene, "bad", expected_revision=_revision(scene))
     service.create_attribute_source(
         scene,
         CreateAttributeSourceRequest(
             draft_id="bad",
+            expected_revision=_revision(scene),
             anchor="scene:main",
             id="missing",
             source="deck",
@@ -35,12 +40,12 @@ def test_missing_attribute_reference_blocks_commit_without_mutating_store():
     store = PrimitiveStore.for_scene(scene)
     before = copy.deepcopy(store.root["definitions"])
 
-    validated = service.validate_draft(scene, "bad")
+    validated = service.validate_draft(scene, "bad", expected_revision=_revision(scene))
 
     assert validated.status == "draft"
     assert "Missing deck definition" in validated.validation.errors[0]
     with pytest.raises(ValueError, match="validation failed"):
-        service.commit_draft(scene, "bad")
+        service.commit_draft(scene, "bad", expected_revision=_revision(scene))
     assert store.root["definitions"] == before
     assert store.get_anchor("scene:main") is None
     persisted = service.drafts.get(scene, "bad")
@@ -65,11 +70,12 @@ def test_validation_rejects_committed_definition_and_anchor_collisions():
     )
     store.ensure_anchor("character:Model")
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "collisions")
+    service.create_draft(scene, "collisions", expected_revision=_revision(scene))
     service.create_deck(
         scene,
         CreateDeckRequest(
             draft_id="collisions",
+            expected_revision=_revision(scene),
             id="poses",
             name="Replacement",
             mode="bag",
@@ -78,10 +84,17 @@ def test_validation_rejects_committed_definition_and_anchor_collisions():
     )
     service.create_anchor(
         scene,
-        CreateAnchorRequest(draft_id="collisions", kind="character", id="Model"),
+        CreateAnchorRequest(
+            draft_id="collisions",
+            expected_revision=_revision(scene),
+            kind="character",
+            id="Model",
+        ),
     )
 
-    validation = service.validate_draft(scene, "collisions").validation
+    validation = service.validate_draft(
+        scene, "collisions", expected_revision=_revision(scene)
+    ).validation
 
     assert validation.ok is False
     assert "Definition already exists: decks/poses" in validation.errors
@@ -92,7 +105,7 @@ def test_validation_checks_all_candidate_attribute_reference_kinds():
     """Candidate validation rejects missing meter, clock, modifier, and relationship refs."""
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "refs")
+    service.create_draft(scene, "refs", expected_revision=_revision(scene))
     sources = {
         "meter": "scene:main/meters/missing",
         "clock": "scene:main/clocks/missing",
@@ -104,6 +117,7 @@ def test_validation_checks_all_candidate_attribute_reference_kinds():
             scene,
             CreateAttributeSourceRequest(
                 draft_id="refs",
+                expected_revision=_revision(scene),
                 anchor="scene:main",
                 id=source,
                 source=source,
@@ -112,7 +126,9 @@ def test_validation_checks_all_candidate_attribute_reference_kinds():
             ),
         )
 
-    validation = service.validate_draft(scene, "refs").validation
+    validation = service.validate_draft(
+        scene, "refs", expected_revision=_revision(scene)
+    ).validation
 
     assert validation.ok is False
     assert "Missing meter primitive: scene:main/meters/missing" in validation.errors
@@ -128,18 +144,21 @@ def test_validation_rejects_missing_modifier_target():
     """Authored modifiers must target a candidate roll table definition or instance."""
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "modifier-target")
+    service.create_draft(scene, "modifier-target", expected_revision=_revision(scene))
     service.create_modifier(
         scene,
         CreateModifierRequest(
             draft_id="modifier-target",
+            expected_revision=_revision(scene),
             id="bonus",
             applies_to="missing-table",
             operation={"add": 1},
         ),
     )
 
-    validation = service.validate_draft(scene, "modifier-target").validation
+    validation = service.validate_draft(
+        scene, "modifier-target", expected_revision=_revision(scene)
+    ).validation
 
     assert validation.ok is False
     assert "Missing modifier target: missing-table" in validation.errors
@@ -149,18 +168,31 @@ def test_validation_rejects_dangling_anchored_roll_table_definition():
     """Anchored roll-table instances must reference a candidate definition."""
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "dangling-table")
+    service.create_draft(scene, "dangling-table", expected_revision=_revision(scene))
     service.create_anchor(
         scene,
-        CreateAnchorRequest(draft_id="dangling-table", kind="scene", id="main"),
+        CreateAnchorRequest(
+            draft_id="dangling-table",
+            expected_revision=_revision(scene),
+            kind="scene",
+            id="main",
+        ),
     )
     draft = service.drafts.get(scene, "dangling-table")
-    draft.anchors["scene:main"].primitives["roll_tables"] = {
-        "local": {"definition": "missing"}
-    }
-    service.drafts.put(scene, draft)
+    draft.anchors["scene:main"].primitives.set_item(
+        "roll_tables", "local", {"definition": "missing"}
+    )
+    service.drafts.put(
+        scene,
+        draft,
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
 
-    validation = service.validate_draft(scene, "dangling-table").validation
+    validation = service.validate_draft(
+        scene, "dangling-table", expected_revision=_revision(scene)
+    ).validation
 
     assert validation.ok is False
     assert (
@@ -172,11 +204,12 @@ def test_validation_rejects_dangling_anchored_roll_table_definition():
 def test_validation_traverses_attribute_and_modifier_condition_references():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "condition-refs")
+    service.create_draft(scene, "condition-refs", expected_revision=_revision(scene))
     service.create_roll_table(
         scene,
         CreateRollTableRequest(
             draft_id="condition-refs",
+            expected_revision=_revision(scene),
             id="table",
             name="Table",
             mode="weighted",
@@ -187,6 +220,7 @@ def test_validation_traverses_attribute_and_modifier_condition_references():
         scene,
         CreateAttributeSourceRequest(
             draft_id="condition-refs",
+            expected_revision=_revision(scene),
             anchor="scene:main",
             id="conditional",
             source="literal",
@@ -227,6 +261,7 @@ def test_validation_traverses_attribute_and_modifier_condition_references():
         scene,
         CreateModifierRequest(
             draft_id="condition-refs",
+            expected_revision=_revision(scene),
             id="conditional-modifier",
             applies_to="table",
             operation={"add": 1},
@@ -243,7 +278,9 @@ def test_validation_traverses_attribute_and_modifier_condition_references():
         ),
     )
 
-    errors = service.validate_draft(scene, "condition-refs").validation.errors
+    errors = service.validate_draft(
+        scene, "condition-refs", expected_revision=_revision(scene)
+    ).validation.errors
 
     assert "Missing attribute primitive: scene:main/attributes/missing" in errors
     assert "Missing meter primitive: scene:main/meters/missing-meter" in errors
@@ -256,11 +293,14 @@ def test_validation_traverses_attribute_and_modifier_condition_references():
 def test_validation_traverses_deck_card_and_roll_table_row_conditions():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "definition-condition-refs")
+    service.create_draft(
+        scene, "definition-condition-refs", expected_revision=_revision(scene)
+    )
     service.create_deck(
         scene,
         CreateDeckRequest(
             draft_id="definition-condition-refs",
+            expected_revision=_revision(scene),
             id="deck",
             name="Deck",
             mode="bag",
@@ -286,6 +326,7 @@ def test_validation_traverses_deck_card_and_roll_table_row_conditions():
         scene,
         CreateRollTableRequest(
             draft_id="definition-condition-refs",
+            expected_revision=_revision(scene),
             id="table",
             name="Table",
             mode="weighted",
@@ -310,7 +351,9 @@ def test_validation_traverses_deck_card_and_roll_table_row_conditions():
     )
 
     errors = service.validate_draft(
-        scene, "definition-condition-refs"
+        scene,
+        "definition-condition-refs",
+        expected_revision=_revision(scene),
     ).validation.errors
 
     assert "Missing meter primitive: scene:main/meters/card-missing" in errors
@@ -320,56 +363,70 @@ def test_validation_traverses_deck_card_and_roll_table_row_conditions():
 def test_validation_traverses_adventure_transition_condition_references():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "adventure-condition-refs")
+    service.create_draft(
+        scene, "adventure-condition-refs", expected_revision=_revision(scene)
+    )
     draft = service.drafts.get(scene, "adventure-condition-refs")
-    draft.definitions["adventures"]["adventure"] = {
-        "id": "adventure",
-        "title": "Adventure",
-        "start_scene": "start",
-        "scenes": {
-            "start": {"id": "start", "title": "Start"},
-            "end": {"id": "end", "title": "End"},
+    draft.definitions.set_item(
+        "adventures",
+        "adventure",
+        {
+            "id": "adventure",
+            "title": "Adventure",
+            "start_scene": "start",
+            "scenes": {
+                "start": {"id": "start", "title": "Start"},
+                "end": {"id": "end", "title": "End"},
+            },
+            "transitions": {
+                "continue": {
+                    "id": "continue",
+                    "from_scene": "start",
+                    "to_scene": "end",
+                    "label": "Continue",
+                    "conditions": [
+                        {
+                            "conditions": [
+                                {
+                                    "kind": "meter",
+                                    "path": "scene:main/meters/missing-meter",
+                                },
+                                {
+                                    "kind": "clock_complete",
+                                    "path": "scene:main/clocks/missing-clock",
+                                },
+                                {
+                                    "kind": "relationship",
+                                    "anchor": "relationship:Alice->Bob",
+                                    "dimension": "trust",
+                                },
+                                {
+                                    "kind": "primitive",
+                                    "path": "scene:main/attributes/missing-attribute",
+                                },
+                                {
+                                    "kind": "anchor_has_tag",
+                                    "anchor": "character:Missing",
+                                    "tag": "active",
+                                },
+                            ]
+                        }
+                    ],
+                }
+            },
         },
-        "transitions": {
-            "continue": {
-                "id": "continue",
-                "from_scene": "start",
-                "to_scene": "end",
-                "label": "Continue",
-                "conditions": [
-                    {
-                        "conditions": [
-                            {
-                                "kind": "meter",
-                                "path": "scene:main/meters/missing-meter",
-                            },
-                            {
-                                "kind": "clock_complete",
-                                "path": "scene:main/clocks/missing-clock",
-                            },
-                            {
-                                "kind": "relationship",
-                                "anchor": "relationship:Alice->Bob",
-                                "dimension": "trust",
-                            },
-                            {
-                                "kind": "primitive",
-                                "path": "scene:main/attributes/missing-attribute",
-                            },
-                            {
-                                "kind": "anchor_has_tag",
-                                "anchor": "character:Missing",
-                                "tag": "active",
-                            },
-                        ]
-                    }
-                ],
-            }
-        },
-    }
-    service.drafts.put(scene, draft)
+    )
+    service.drafts.put(
+        scene,
+        draft,
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
 
-    validation = service.validate_draft(scene, "adventure-condition-refs").validation
+    validation = service.validate_draft(
+        scene, "adventure-condition-refs", expected_revision=_revision(scene)
+    ).validation
 
     assert validation.ok is False
     assert (
@@ -392,11 +449,12 @@ def test_validation_traverses_adventure_transition_condition_references():
 def test_validation_warns_for_deck_avoid_recent_and_unrenderable_prompt_source():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "warnings")
+    service.create_draft(scene, "warnings", expected_revision=_revision(scene))
     service.create_deck(
         scene,
         CreateDeckRequest(
             draft_id="warnings",
+            expected_revision=_revision(scene),
             id="deck",
             name="Deck",
             mode="bag",
@@ -407,6 +465,7 @@ def test_validation_warns_for_deck_avoid_recent_and_unrenderable_prompt_source()
         scene,
         CreateAttributeSourceRequest(
             draft_id="warnings",
+            expected_revision=_revision(scene),
             anchor="scene:main",
             id="draw",
             source="deck",
@@ -416,7 +475,9 @@ def test_validation_warns_for_deck_avoid_recent_and_unrenderable_prompt_source()
         ),
     )
 
-    warnings = service.validate_draft(scene, "warnings").validation.warnings
+    warnings = service.validate_draft(
+        scene, "warnings", expected_revision=_revision(scene)
+    ).validation.warnings
 
     assert any("avoid_recent" in warning for warning in warnings)
     assert any("lacks guaranteed renderable text" in warning for warning in warnings)
@@ -425,9 +486,10 @@ def test_validation_warns_for_deck_avoid_recent_and_unrenderable_prompt_source()
 def test_prompt_visible_null_literal_warns_and_is_preserved_on_commit():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "null-literal")
+    service.create_draft(scene, "null-literal", expected_revision=_revision(scene))
     request = CreateAttributeSourceRequest(
         draft_id="null-literal",
+        expected_revision=_revision(scene),
         anchor="scene:main",
         id="unknown",
         source="literal",
@@ -439,14 +501,16 @@ def test_prompt_visible_null_literal_warns_and_is_preserved_on_commit():
     assert request.canonical_payload["value"] is None
     service.create_attribute_source(scene, request)
 
-    validated = service.validate_draft(scene, "null-literal")
+    validated = service.validate_draft(
+        scene, "null-literal", expected_revision=_revision(scene)
+    )
     assert validated.validation.ok is True
     assert any(
         "scene:main/attributes/unknown lacks guaranteed renderable text" in warning
         for warning in validated.validation.warnings
     )
 
-    service.commit_draft(scene, "null-literal")
+    service.commit_draft(scene, "null-literal", expected_revision=_revision(scene))
     stored = PrimitiveStore.for_scene(scene).get_primitive(
         "scene:main/attributes/unknown"
     )
@@ -457,11 +521,12 @@ def test_prompt_visible_null_literal_warns_and_is_preserved_on_commit():
 def test_validation_rejects_base_attribute_destinations_and_refs():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "leak")
+    service.create_draft(scene, "leak", expected_revision=_revision(scene))
     service.create_deck(
         scene,
         CreateDeckRequest(
             draft_id="leak",
+            expected_revision=_revision(scene),
             id="deck",
             name="Deck",
             mode="bag",
@@ -484,6 +549,7 @@ def test_validation_rejects_base_attribute_destinations_and_refs():
         scene,
         CreateAttributeSourceRequest(
             draft_id="leak",
+            expected_revision=_revision(scene),
             anchor="scene:main",
             id="legacy",
             source="state_ref",
@@ -492,7 +558,9 @@ def test_validation_rejects_base_attribute_destinations_and_refs():
         ),
     )
 
-    errors = service.validate_draft(scene, "leak").validation.errors
+    errors = service.validate_draft(
+        scene, "leak", expected_revision=_revision(scene)
+    ).validation.errors
 
     assert len([error for error in errors if "Character.base_attributes" in error]) == 2
 
@@ -500,11 +568,12 @@ def test_validation_rejects_base_attribute_destinations_and_refs():
 def test_validation_rejects_missing_roll_table_modifier_reference():
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "table-modifier")
+    service.create_draft(scene, "table-modifier", expected_revision=_revision(scene))
     service.create_roll_table(
         scene,
         CreateRollTableRequest(
             draft_id="table-modifier",
+            expected_revision=_revision(scene),
             id="table",
             name="Table",
             mode="weighted",
@@ -513,6 +582,8 @@ def test_validation_rejects_missing_roll_table_modifier_reference():
         ),
     )
 
-    errors = service.validate_draft(scene, "table-modifier").validation.errors
+    errors = service.validate_draft(
+        scene, "table-modifier", expected_revision=_revision(scene)
+    ).validation.errors
 
     assert "Missing modifier: missing" in errors

@@ -3,7 +3,7 @@ Unit tests for `talemate.world_state.templates.base` covering the parts
 not exercised by `tests/test_world_state_templates.py`:
 
 - `Template.formatted` (player_name / character_name interpolation, falsy values)
-- `Group.sanitize_data` malformed-input branches
+- strict `Group.load` validation
 - `Collection.flat_by_template_uid_only`
 - `Collection.typed`
 - `TypedCollection.find_by_name`
@@ -174,11 +174,11 @@ class TestValidateTemplate:
 
 
 # ---------------------------------------------------------------------------
-# Group.sanitize_data - malformed YAML data branches
+# Group.load strict validation
 # ---------------------------------------------------------------------------
 
 
-class TestSanitizeData:
+class TestGroupLoad:
     def _write(self, path, data):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
@@ -193,166 +193,46 @@ class TestSanitizeData:
         g = Group.load(path)
         assert g.uid  # assigned a new uuid
 
-    def test_loads_with_missing_name_assigns_uid_prefix(self):
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            lambda data: data.update(name=None),
+            lambda data: data.update(author=None),
+            lambda data: data.update(description=None),
+            lambda data: data.update(unexpected=True),
+            lambda data: data["templates"].update(tid=None),
+            lambda data: data["templates"].update(
+                tid={"name": "missing type", "uid": "tid"}
+            ),
+            lambda data: data["templates"].update(
+                tid={"name": "unknown", "uid": "tid", "template_type": "unknown"}
+            ),
+            lambda data: data["templates"].update(
+                tid={
+                    "name": "bad priority",
+                    "uid": "tid",
+                    "template_type": "state_reinforcement",
+                    "query": "q",
+                    "state_type": "npc",
+                    "priority": "not-a-number",
+                }
+            ),
+        ],
+    )
+    def test_malformed_groups_and_templates_fail_loudly(self, mutation):
         path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": "a",
-                "name": None,
-                "description": "d",
-                "templates": {},
-                "uid": "abcdefghijkl",
-            },
-        )
-        g = Group.load(path)
-        assert g.name == "abcdefgh"
+        data = {
+            "author": "a",
+            "name": "n",
+            "description": "d",
+            "templates": {},
+            "uid": "g-uid",
+        }
+        mutation(data)
+        self._write(path, data)
 
-    def test_loads_with_null_description_and_author(self):
-        path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": None,
-                "name": "n",
-                "description": None,
-                "templates": {},
-            },
-        )
-        g = Group.load(path)
-        assert g.description == ""
-        assert g.author == ""
-
-    def test_loads_drops_null_template(self):
-        path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": "a",
-                "name": "n",
-                "description": "d",
-                "templates": {"tid": None},
-                "uid": "g-uid",
-            },
-        )
-        g = Group.load(path)
-        assert g.templates == {}
-
-    def test_loads_assigns_template_uid_from_key(self):
-        path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": "a",
-                "name": "n",
-                "description": "d",
-                "templates": {
-                    "key1": {
-                        "name": "named",
-                        "template_type": "state_reinforcement",
-                        "query": "q",
-                        "state_type": "npc",
-                    }
-                },
-                "uid": "g-uid",
-            },
-        )
-        g = Group.load(path)
-        assert "key1" in g.templates
-        assert g.templates["key1"].uid == "key1"
-        # template.group should match the group's uid
-        assert g.templates["key1"].group == "g-uid"
-
-    def test_loads_assigns_template_name_from_key(self):
-        path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": "a",
-                "name": "n",
-                "description": "d",
-                "templates": {
-                    "abcdefghijkl": {
-                        "template_type": "state_reinforcement",
-                        "query": "q",
-                        "state_type": "npc",
-                    }
-                },
-                "uid": "g-uid",
-            },
-        )
-        g = Group.load(path)
-        # name was missing -> set to first 8 chars of template_id
-        assert g.templates["abcdefghijkl"].name == "abcdefgh"
-
-    def test_loads_drops_template_with_missing_template_type(self):
-        # A template with no `template_type` field should be dropped (the
-        # missing-type branch deletes and `continue`s, so it doesn't fall
-        # into the invalid-type branch and double-delete).
-        path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": "a",
-                "name": "n",
-                "description": "d",
-                "templates": {
-                    "tid1": {
-                        "name": "no-type",
-                        "uid": "tid1",
-                        # template_type intentionally absent
-                    }
-                },
-                "uid": "g-uid",
-            },
-        )
-        g = Group.load(path)
-        assert "tid1" not in g.templates
-
-    def test_loads_drops_template_with_invalid_template_type(self):
-        path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": "a",
-                "name": "n",
-                "description": "d",
-                "templates": {
-                    "tid1": {
-                        "name": "bad",
-                        "template_type": "no_such_type",
-                        "uid": "tid1",
-                    }
-                },
-                "uid": "g-uid",
-            },
-        )
-        g = Group.load(path)
-        assert "tid1" not in g.templates
-
-    def test_loads_with_non_int_priority_falls_back_to_one(self):
-        path = os.path.join(TEMPLATE_TEST_PATH, "g.yaml")
-        self._write(
-            path,
-            {
-                "author": "a",
-                "name": "n",
-                "description": "d",
-                "templates": {
-                    "tid": {
-                        "name": "x",
-                        "template_type": "state_reinforcement",
-                        "query": "q",
-                        "state_type": "npc",
-                        "priority": "not-a-number",
-                        "uid": "tid",
-                    }
-                },
-                "uid": "g-uid",
-            },
-        )
-        g = Group.load(path)
-        assert g.templates["tid"].priority == 1
+        with pytest.raises((ValueError, TypeError)):
+            Group.load(path)
 
 
 # ---------------------------------------------------------------------------

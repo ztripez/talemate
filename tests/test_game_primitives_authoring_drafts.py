@@ -5,17 +5,15 @@ import copy
 import pytest
 
 from talemate.game.primitives.authoring import PrimitiveDraftStore
+from talemate.game.primitives.containers import PrimitiveDefinitions
 from talemate.game.primitives.definitions import (
     DEFINITION_KINDS,
     ClockPayload,
     MeterPayload,
-    PrimitiveDefinitions,
 )
+from talemate.game.primitives.draft_schema import PrimitiveDraft
 from talemate.game.primitives.exceptions import PrimitiveStoreError
-from talemate.game.primitives.schema import (
-    PrimitiveDraft,
-    PrimitiveRootPayload,
-)
+from talemate.game.primitives.schema import PrimitiveRootPayload
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
@@ -132,7 +130,13 @@ def test_create_draft_does_not_change_committed_definitions_or_anchors():
         {"definitions": store.root["definitions"], "anchors": store.root["anchors"]}
     )
 
-    draft = PrimitiveDraftStore().create(scene, "session")
+    draft = PrimitiveDraftStore().create(
+        scene,
+        "session",
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
 
     assert draft.id == "session"
     assert draft.status == "draft"
@@ -144,10 +148,22 @@ def test_duplicate_and_missing_drafts_fail_loudly():
     """Draft lookup and creation reject ambiguous state."""
     scene = Scene()
     drafts = PrimitiveDraftStore()
-    drafts.create(scene, "session")
+    drafts.create(
+        scene,
+        "session",
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
 
     with pytest.raises(PrimitiveStoreError, match="already exists"):
-        drafts.create(scene, "session")
+        drafts.create(
+            scene,
+            "session",
+            expected_revision=PrimitiveStore.read_snapshot_for_scene(
+                scene
+            ).revision_token(),
+        )
     with pytest.raises(PrimitiveStoreError, match="not found"):
         drafts.get(scene, "missing")
 
@@ -157,13 +173,30 @@ def test_draft_id_is_generated_only_when_none():
     scene = Scene()
     drafts = PrimitiveDraftStore()
 
-    generated = drafts.create(scene)
+    generated = drafts.create(
+        scene,
+        expected_revision=PrimitiveStore.read_snapshot_for_scene(
+            scene
+        ).revision_token(),
+    )
 
     assert generated.id.startswith("draft-")
     with pytest.raises(ValueError, match="at least 1 character"):
-        drafts.create(scene, "")
+        drafts.create(
+            scene,
+            "",
+            expected_revision=PrimitiveStore.read_snapshot_for_scene(
+                scene
+            ).revision_token(),
+        )
     with pytest.raises(ValueError, match="at least 1 character"):
-        drafts.create(scene, "   ")
+        drafts.create(
+            scene,
+            "   ",
+            expected_revision=PrimitiveStore.read_snapshot_for_scene(
+                scene
+            ).revision_token(),
+        )
 
 
 def test_replace_validated_root_is_atomic_on_validation_failure():

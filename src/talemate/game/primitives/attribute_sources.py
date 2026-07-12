@@ -15,10 +15,10 @@ from talemate.game.primitives.conditions import conditions_match
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.modifiers import RollModifier
 from talemate.game.primitives.selection import SelectionResult
-from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 from talemate.game.primitives.values import primitive_payload_value
 
 if TYPE_CHECKING:
+    from talemate.game.primitives.store import PrimitiveStoreReader
     from talemate.tale_mate import Scene
 
 SelectionResultField = Literal["text", "label", "variables", "result", "result_id"]
@@ -206,7 +206,11 @@ def resolve_primitive_value(
         raise PrimitiveError(
             f"Attribute source '{source.id}' requires {expected_kind} ref"
         )
-    payload = (store or PrimitiveStore.for_scene(scene)).get_primitive(ref)
+    if store is None:
+        from talemate.game.primitives.store import PrimitiveStore
+
+        store = PrimitiveStore.for_scene(scene)
+    payload = store.get_primitive(ref)
     if payload is None:
         raise PrimitiveError(f"Primitive not found: {ref.key()}")
     return (
@@ -233,6 +237,8 @@ def resolve_modifier(
         PrimitiveError: If the modifier reference is missing or cannot be found.
         pydantic.ValidationError: If the modifier payload is invalid.
     """
+    from talemate.game.primitives.store import PrimitiveStore
+
     store = PrimitiveStore.for_scene(scene)
     ref_text = require_source_ref(source)
     if "/" in ref_text:

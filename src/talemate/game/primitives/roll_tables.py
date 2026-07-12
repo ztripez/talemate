@@ -19,12 +19,12 @@ from talemate.game.primitives.effects import apply_effects as apply_effect_batch
 from talemate.game.primitives.exceptions import PrimitiveError
 from talemate.game.primitives.ledger import LedgerEntry
 from talemate.game.primitives.modifiers import RollModifier
-from talemate.game.primitives.schema import RollTableInstancePayload
+from talemate.game.primitives.primitive_payloads import RollTableInstancePayload
 from talemate.game.primitives.selection import SelectionResult
-from talemate.game.primitives.store import PrimitiveStore
 from talemate.game.primitives.values import primitive_payload_value
 
 if TYPE_CHECKING:
+    from talemate.game.primitives.store import PrimitiveStore
     from talemate.tale_mate import Scene
 
 _DICE_RE = re.compile(r"^(?P<count>[1-9][0-9]*)d(?P<sides>[1-9][0-9]*)$")
@@ -498,6 +498,8 @@ class RollTableEngine:
         if type(apply_effects) is not bool:
             raise TypeError("apply_effects must be a boolean")
         context_payload = _validate_context(context)
+        from talemate.game.primitives.store import PrimitiveStore
+
         store = PrimitiveStore.for_scene(scene)
         definition, source_id, resolved_anchor = self._resolve_table(
             store, table, anchor
@@ -591,6 +593,8 @@ class RollTableEngine:
         anchor: AnchorRef | str | None = None,
     ) -> _OddsPreviewInput:
         """Resolve a table and conditions into detached computation input."""
+        from talemate.game.primitives.store import PrimitiveStore
+
         store = PrimitiveStore.for_scene(scene)
         definition, source_id, _ = self._resolve_table(store, table, anchor)
         active_rows, inactive_rows = _condition_filter(scene, definition.rows)

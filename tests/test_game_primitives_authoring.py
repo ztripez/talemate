@@ -21,21 +21,30 @@ from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
 
+def _revision(scene: Scene) -> str:
+    return PrimitiveStore.read_snapshot_for_scene(scene).revision_token()
+
+
 def test_authoring_tools_build_isolated_valid_draft_and_commit():
     """Narrow tools stage canonical payloads and commit them only after validation."""
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "session")
+    service.create_draft(scene, "session", expected_revision=_revision(scene))
     service.create_anchor(
         scene,
         CreateAnchorRequest(
-            draft_id="session", kind="character", id="Model", tags=["active"]
+            draft_id="session",
+            expected_revision=_revision(scene),
+            kind="character",
+            id="Model",
+            tags=["active"],
         ),
     )
     service.create_meter(
         scene,
         CreateMeterRequest(
             draft_id="session",
+            expected_revision=_revision(scene),
             anchor="character:Model",
             id="focus",
             min=0,
@@ -47,6 +56,7 @@ def test_authoring_tools_build_isolated_valid_draft_and_commit():
         scene,
         CreateDeckRequest(
             draft_id="session",
+            expected_revision=_revision(scene),
             id="poses",
             name="Poses",
             mode="bag",
@@ -57,6 +67,7 @@ def test_authoring_tools_build_isolated_valid_draft_and_commit():
         scene,
         CreateAttributeSourceRequest(
             draft_id="session",
+            expected_revision=_revision(scene),
             anchor="character:Model",
             id="pose",
             source="deck",
@@ -69,9 +80,13 @@ def test_authoring_tools_build_isolated_valid_draft_and_commit():
     assert store.get_definition("decks", "poses") is None
     assert store.get_anchor("character:Model") is None
 
-    validated = service.validate_draft(scene, "session")
+    validated = service.validate_draft(
+        scene, "session", expected_revision=_revision(scene)
+    )
     assert validated.status == "validated"
-    committed = service.commit_draft(scene, "session")
+    committed = service.commit_draft(
+        scene, "session", expected_revision=_revision(scene)
+    )
 
     assert committed.status == "committed"
     assert store.get_definition("decks", "poses")["cards"][0]["id"] == "calm"
@@ -90,11 +105,12 @@ def test_authored_modifier_explanations_appear_in_runtime_roll_debug():
     scene.game_state.set_var("active", True)
     scene.game_state.set_var("inactive", False)
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "runtime-modifiers")
+    service.create_draft(scene, "runtime-modifiers", expected_revision=_revision(scene))
     service.create_roll_table(
         scene,
         CreateRollTableRequest(
             draft_id="runtime-modifiers",
+            expected_revision=_revision(scene),
             id="table",
             name="Table",
             dice="1d1",
@@ -110,6 +126,7 @@ def test_authored_modifier_explanations_appear_in_runtime_roll_debug():
             scene,
             CreateModifierRequest(
                 draft_id="runtime-modifiers",
+                expected_revision=_revision(scene),
                 id=modifier_id,
                 applies_to="table",
                 when=[
@@ -127,7 +144,7 @@ def test_authored_modifier_explanations_appear_in_runtime_roll_debug():
                 explanation=explanation,
             ),
         )
-    service.commit_draft(scene, "runtime-modifiers")
+    service.commit_draft(scene, "runtime-modifiers", expected_revision=_revision(scene))
 
     result = RollTableEngine().roll(scene, "table")
 
@@ -144,12 +161,13 @@ def test_relationship_tool_creates_directional_anchor_dimensions():
     """Relationship authoring stages the canonical directional meter representation."""
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "relations")
+    service.create_draft(scene, "relations", expected_revision=_revision(scene))
 
     draft = service.create_relationship(
         scene,
         CreateRelationshipRequest(
             draft_id="relations",
+            expected_revision=_revision(scene),
             source="Alice",
             target="Bob",
             dimensions=[{"id": "trust", "value": 2}],
@@ -159,7 +177,7 @@ def test_relationship_tool_creates_directional_anchor_dimensions():
 
     anchor = draft.anchors["relationship:Alice->Bob"]
     assert anchor.tags == ["party"]
-    assert anchor.primitives["meters"]["trust"] == {
+    assert anchor.primitives["meters"]["trust"].model_dump(mode="json") == {
         "id": "trust",
         "label": None,
         "min": -5,
@@ -173,11 +191,12 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
     """Re-declaring a staged anchor preserves primitives already attached to it."""
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "anchor-update")
+    service.create_draft(scene, "anchor-update", expected_revision=_revision(scene))
     service.create_meter(
         scene,
         CreateMeterRequest(
             draft_id="anchor-update",
+            expected_revision=_revision(scene),
             anchor="character:Model",
             id="focus",
             min=0,
@@ -190,6 +209,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
         scene,
         CreateAnchorRequest(
             draft_id="anchor-update",
+            expected_revision=_revision(scene),
             kind="character",
             id="Model",
             tags=["active"],
@@ -200,7 +220,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
     anchor = draft.anchors["character:Model"]
     assert anchor.tags == ["active"]
     assert anchor.meta == {"role": "lead"}
-    assert anchor.primitives["meters"]["focus"]["value"] == 2
+    assert anchor.primitives["meters"]["focus"].value == 2
 
 
 @pytest.mark.parametrize(
@@ -212,6 +232,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
                 scene,
                 CreateDeckRequest(
                     draft_id="duplicates",
+                    expected_revision=_revision(scene),
                     id="same",
                     name="Deck",
                     mode="bag",
@@ -225,6 +246,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
                 scene,
                 CreateRollTableRequest(
                     draft_id="duplicates",
+                    expected_revision=_revision(scene),
                     id="same",
                     name="Table",
                     mode="weighted",
@@ -238,6 +260,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
                 scene,
                 CreateModifierRequest(
                     draft_id="duplicates",
+                    expected_revision=_revision(scene),
                     id="same",
                     applies_to="table",
                     operation={"add": 1},
@@ -250,6 +273,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
                 scene,
                 CreateRelationshipRequest(
                     draft_id="duplicates",
+                    expected_revision=_revision(scene),
                     source="Alice",
                     target="Bob",
                     dimensions=[{"id": "trust", "value": 1}],
@@ -262,6 +286,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
                 scene,
                 CreateMeterRequest(
                     draft_id="duplicates",
+                    expected_revision=_revision(scene),
                     anchor="scene:main",
                     id="same",
                     min=0,
@@ -276,6 +301,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
                 scene,
                 CreateClockRequest(
                     draft_id="duplicates",
+                    expected_revision=_revision(scene),
                     anchor="scene:main",
                     id="same",
                     max=4,
@@ -288,6 +314,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
                 scene,
                 CreateAttributeSourceRequest(
                     draft_id="duplicates",
+                    expected_revision=_revision(scene),
                     anchor="scene:main",
                     id="same",
                     source="literal",
@@ -301,7 +328,7 @@ def test_create_anchor_updates_metadata_without_discarding_primitives():
 def test_duplicate_staged_ids_are_rejected_for_each_category(category, stage):
     scene = Scene()
     service = PrimitiveAuthoringService()
-    service.create_draft(scene, "duplicates")
+    service.create_draft(scene, "duplicates", expected_revision=_revision(scene))
 
     stage(service, scene)
 

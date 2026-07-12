@@ -9,7 +9,8 @@ from talemate.context import active_scene
 from talemate.game.engine.nodes.core import GraphState, Node
 from talemate.game.engine.nodes.primitives.helpers import optional_input
 from talemate.game.engine.nodes.registry import register
-from talemate.game.primitives.decks import DeckDrawRequest, DeckEngine
+from talemate.game.primitives.deck_schema import DeckDrawRequest
+from talemate.game.primitives.decks import DeckEngine
 
 __all__ = ["Draw", "Peek", "Reset", "Shuffle"]
 
@@ -54,6 +55,7 @@ class Draw(Node):
         Raises:
             PrimitiveError: If deck resolution or draw execution fails.
             pydantic.ValidationError: If node inputs are invalid.
+
         """
         scene = active_scene.get()
         request = DeckDrawRequest.model_validate(
@@ -120,6 +122,7 @@ class Peek(Node):
         Raises:
             PrimitiveError: If deck resolution or peek execution fails.
             pydantic.ValidationError: If deck input payloads are invalid.
+
         """
         scene = active_scene.get()
         payload = DeckEngine().peek(
@@ -158,6 +161,7 @@ class Shuffle(Node):
         Raises:
             PrimitiveError: If deck resolution or shuffle execution fails.
             pydantic.ValidationError: If deck input payloads are invalid.
+
         """
         scene = active_scene.get()
         runtime = DeckEngine().shuffle(
@@ -196,6 +200,7 @@ class Reset(Node):
         Raises:
             PrimitiveError: If deck resolution or reset execution fails.
             pydantic.ValidationError: If deck input payloads are invalid.
+
         """
         scene = active_scene.get()
         runtime = DeckEngine().reset(

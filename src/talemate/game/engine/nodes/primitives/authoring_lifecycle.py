@@ -1,10 +1,13 @@
 """Primitive draft lifecycle graph nodes."""
 
+from talemate.context import active_scene
 from talemate.game.engine.nodes.core import GraphState
 from talemate.game.engine.nodes.primitives.authoring_base import (
     CreateDraftRequest,
+    DraftNodeOutput,
     DraftOutputNode,
     authoring_service,
+    current_revision,
 )
 from talemate.game.engine.nodes.primitives.helpers import optional_input
 from talemate.game.engine.nodes.registry import register
@@ -30,7 +33,12 @@ class CreateDraft(DraftOutputNode):
         request = CreateDraftRequest.model_validate(
             {"draft_id": optional_input(self, "draft_id", None)}
         )
-        self.publish_result(authoring_service().create_draft, request.draft_id)
+        draft = authoring_service().create_draft(
+            active_scene.get(),
+            request.draft_id,
+            expected_revision=current_revision(),
+        )
+        self.set_output_values(DraftNodeOutput(draft=draft).model_dump(mode="json"))
 
 
 class DraftLifecycleNode(DraftOutputNode):
@@ -51,7 +59,12 @@ class DraftLifecycleNode(DraftOutputNode):
             pydantic.ValidationError: If the draft identifier is invalid.
 
         """
-        return DraftRequest.model_validate({"draft_id": self.require_input("draft_id")})
+        return DraftRequest.model_validate(
+            {
+                "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
+            }
+        )
 
 
 @register("primitives/authoring/ValidateDraft")
@@ -66,7 +79,12 @@ class ValidateDraft(DraftLifecycleNode):
 
         """
         request = self.request()
-        self.publish_result(authoring_service().validate_draft, request.draft_id)
+        draft = authoring_service().validate_draft(
+            active_scene.get(),
+            request.draft_id,
+            expected_revision=request.expected_revision,
+        )
+        self.set_output_values(DraftNodeOutput(draft=draft).model_dump(mode="json"))
 
 
 @register("primitives/authoring/CommitDraft")
@@ -81,4 +99,9 @@ class CommitDraft(DraftLifecycleNode):
 
         """
         request = self.request()
-        self.publish_result(authoring_service().commit_draft, request.draft_id)
+        draft = authoring_service().commit_draft(
+            active_scene.get(),
+            request.draft_id,
+            expected_revision=request.expected_revision,
+        )
+        self.set_output_values(DraftNodeOutput(draft=draft).model_dump(mode="json"))

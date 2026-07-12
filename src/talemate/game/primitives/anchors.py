@@ -6,18 +6,11 @@ from typing import Literal
 
 import pydantic
 
+from talemate.game.primitives.constants import ANCHOR_KINDS
 from talemate.game.primitives.exceptions import InvalidAnchorRef, InvalidPrimitiveRef
 
 #: Supported owner categories for an ``AnchorRef``.
-AnchorKind = Literal[
-    "scene",
-    "character",
-    "object",
-    "relationship",
-    "location",
-    "story_scene",
-    "project",
-]
+AnchorKind = Literal[*ANCHOR_KINDS]
 
 
 class AnchorRef(pydantic.BaseModel):

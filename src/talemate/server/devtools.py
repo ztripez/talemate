@@ -1,3 +1,5 @@
+"""Expose development-only prompt, scene-state, and diagnostic websocket actions."""
+
 import json
 
 import pydantic
@@ -15,6 +17,8 @@ log = structlog.get_logger("talemate.server.devtools")
 
 
 class TestPromptPayload(pydantic.BaseModel):
+    """Validate a direct prompt test and its generation configuration."""
+
     prompt: str
     generation_parameters: dict
     client_name: str
@@ -22,26 +26,31 @@ class TestPromptPayload(pydantic.BaseModel):
 
 
 class SetSceneStatePayload(pydantic.BaseModel):
+    """Validate a complete replacement scene-state model."""
+
     state: SceneState
 
 
 class GameStateVariablesPayload(pydantic.BaseModel):
+    """Validate replacement JSON-compatible game-state variables."""
+
     variables: dict[str, Any] = {}
 
 
 class GameStateWatchPathsPayload(pydantic.BaseModel):
+    """Validate game-state paths selected for frontend observation."""
+
     paths: list[str] = []
 
 
 class DumpPromptLogPayload(pydantic.BaseModel):
+    """Validate prompt records requested for diagnostic persistence."""
+
     prompts: list[dict[str, Any]] = []
 
 
 def ensure_number(v):
-    """
-    if v is a str but digit turn into into or float
-    """
-
+    """Convert a numeric string to ``int`` or ``float`` and preserve other values."""
     if isinstance(v, str):
         if v.isdigit():
             return int(v)
@@ -53,9 +62,12 @@ def ensure_number(v):
 
 
 class DevToolsPlugin(Plugin):
+    """Serve development diagnostics through the ``devtools`` websocket router."""
+
     router = "devtools"
 
     async def handle_test_prompt(self, data):
+        """Validate a prompt test, invoke its client, and queue the full response."""
         payload = TestPromptPayload(**data)
         client: ClientBase = get_client(payload.client_name)
 
@@ -90,6 +102,7 @@ class DevToolsPlugin(Plugin):
         )
 
     async def handle_get_scene_state(self, data):
+        """Queue the active scene's editable state representation."""
         scene = self.scene
         editor = SceneStateEditor(scene)
         state = editor.dump()
@@ -99,6 +112,7 @@ class DevToolsPlugin(Plugin):
         )
 
     async def handle_update_scene_state(self, data):
+        """Validate and replace editable scene state, reporting explicit failure."""
         scene = self.scene
         editor = SceneStateEditor(scene)
 
@@ -106,6 +120,13 @@ class DevToolsPlugin(Plugin):
             payload = SetSceneStatePayload(**data)
             editor.load(payload.model_dump().get("state"))
         except Exception as exc:
+            self.websocket_handler.queue_put(
+                {
+                    "type": "devtools",
+                    "action": "scene_state_update_failed",
+                    "error": {"message": str(exc)},
+                }
+            )
             await self.signal_operation_failed(str(exc))
             return
 
@@ -118,6 +139,7 @@ class DevToolsPlugin(Plugin):
         await self.signal_operation_done()
 
     async def handle_get_game_state(self, data):
+        """Queue active-scene game-state variables or report a missing scene."""
         scene = self.scene
         if not scene:
             await self.signal_operation_failed("No active scene")
@@ -135,6 +157,7 @@ class DevToolsPlugin(Plugin):
         )
 
     async def handle_update_game_state(self, data):
+        """Validate and replace game-state variables, then reload dependent pins."""
         scene = self.scene
         if not scene:
             await self.signal_operation_failed("No active scene")
@@ -165,6 +188,7 @@ class DevToolsPlugin(Plugin):
         await self.signal_operation_done()
 
     async def handle_get_game_state_watch_paths(self, data):
+        """Queue paths currently selected for game-state observation."""
         scene = self.scene
         if not scene:
             await self.signal_operation_failed("No active scene")
@@ -179,6 +203,7 @@ class DevToolsPlugin(Plugin):
         )
 
     async def handle_set_game_state_watch_paths(self, data):
+        """Validate, normalize, and persist game-state observation paths."""
         scene = self.scene
         if not scene:
             await self.signal_operation_failed("No active scene")
@@ -211,6 +236,7 @@ class DevToolsPlugin(Plugin):
         await self.signal_operation_done()
 
     async def handle_dump_prompt_log(self, data):
+        """Validate and write prompt diagnostics to the configured logs directory."""
         try:
             payload = DumpPromptLogPayload(**data)
         except Exception as exc:

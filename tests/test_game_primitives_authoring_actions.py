@@ -216,6 +216,8 @@ def test_authoring_action_examples_match_canonical_request_models():
         assert isinstance(examples, list) and examples
         for example in examples:
             payload = {"draft_id": "example-draft", **example}
+            if "expected_revision" in request_model.model_fields:
+                payload["expected_revision"] = "revision"
             request_model.model_validate(payload)
 
 

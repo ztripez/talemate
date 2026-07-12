@@ -4,6 +4,7 @@ from talemate.game.engine.nodes.core import UNRESOLVED, GraphState
 from talemate.game.engine.nodes.primitives.authoring_base import (
     DraftOutputNode,
     authoring_service,
+    current_revision,
 )
 from talemate.game.engine.nodes.primitives.helpers import optional_input
 from talemate.game.engine.nodes.registry import register
@@ -39,6 +40,7 @@ class CreateAnchor(DraftOutputNode):
         request = CreateAnchorRequest.model_validate(
             {
                 "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
                 "kind": self.require_input("kind"),
                 "id": self.require_input("id"),
                 "tags": optional_input(self, "tags", []),
@@ -74,6 +76,7 @@ class CreateMeter(DraftOutputNode):
         request = CreateMeterRequest.model_validate(
             {
                 "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
                 "anchor": self.require_input("anchor"),
                 "id": self.require_input("id"),
                 "label": optional_input(self, "label", None),
@@ -111,6 +114,7 @@ class CreateClock(DraftOutputNode):
         request = CreateClockRequest.model_validate(
             {
                 "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
                 "anchor": self.require_input("anchor"),
                 "id": self.require_input("id"),
                 "label": optional_input(self, "label", None),
@@ -145,6 +149,7 @@ class CreateRelationshipModel(DraftOutputNode):
         request = CreateRelationshipRequest.model_validate(
             {
                 "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
                 "source": self.require_input("source"),
                 "target": self.require_input("target"),
                 "dimensions": self.require_input("dimensions"),
@@ -179,6 +184,7 @@ class CreateAttributeSource(DraftOutputNode):
         """
         payload = {
             "draft_id": self.require_input("draft_id"),
+            "expected_revision": current_revision(),
             "anchor": self.require_input("anchor"),
             "id": self.require_input("id"),
             "source": self.require_input("source"),

@@ -22,6 +22,7 @@ from .character import CharacterMixin
 from .shared_context import SharedContextMixin
 from .episodes import EpisodesMixin
 from .scene_state_reset import SceneStateResetMixin
+from .game_primitives_mixin import GamePrimitivesMixin
 
 log = structlog.get_logger("talemate.server.world_state_manager")
 
@@ -210,8 +211,11 @@ class WorldStateManagerPlugin(
     SharedContextMixin,
     EpisodesMixin,
     SceneStateResetMixin,
+    GamePrimitivesMixin,
     Plugin,
 ):
+    """Serve world-state and Game Primitives websocket actions for a scene."""
+
     router = "world_state_manager"
 
     @property

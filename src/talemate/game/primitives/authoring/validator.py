@@ -1,4 +1,4 @@
-"""Validation and atomic commit for primitive authoring drafts."""
+"""Candidate construction and atomic commit for primitive authoring drafts."""
 
 from __future__ import annotations
 
@@ -7,446 +7,212 @@ from typing import TYPE_CHECKING
 
 import pydantic
 
-from talemate.game.primitives.anchors import AnchorRef, PrimitiveRef
-from talemate.game.primitives.adventure import AdventureDefinition
-from talemate.game.primitives.attribute_sources import (
-    DeckAttributeOptions,
-    RollTableAttributeOptions,
+from talemate.game.primitives.anchors import (
+    AnchorRef,
+    PrimitiveRef,
+    relationship_participants,
 )
-from talemate.game.primitives.attributes import AttributeSource
-from talemate.game.primitives.conditions import (
-    PrimitiveCondition,
-    PrimitiveConditionGroup,
+from talemate.game.primitives.authoring.reference_validation import (
+    PrimitiveReferenceValidator,
 )
-from talemate.game.primitives.decks import DeckDefinition
-from talemate.game.primitives.definitions import PrimitiveDefinitions
-from talemate.game.primitives.modifiers import RollModifier
-from talemate.game.primitives.roll_tables import RollTableDefinition
-from talemate.game.primitives.schema import (
+from talemate.game.primitives.authoring.runtime_validation import (
+    PrimitiveRuntimeValidator,
+)
+from talemate.game.primitives.containers import PrimitiveDefinitions
+from talemate.game.primitives.draft_schema import (
+    DraftChangeTargets,
     DraftValidation,
     PrimitiveDraft,
-    PrimitiveRootPayload,
-    RollTableInstancePayload,
 )
+from talemate.game.primitives.exceptions import PrimitiveError
+from talemate.game.primitives.schema import PrimitiveRootPayload
 from talemate.game.primitives.store import PrimitiveStore
+from talemate.game.primitives.store_snapshot import PrimitiveStoreSnapshot
 
 if TYPE_CHECKING:
     from talemate.tale_mate import Scene
 
 
 class PrimitiveDraftValidator:
-    """Validate staged primitive content and atomically commit valid drafts."""
+    """Build complete candidates, coordinate validation, and commit atomically."""
+
+    def __init__(self) -> None:
+        """Initialize focused reference and runtime validation collaborators."""
+        self.references = PrimitiveReferenceValidator()
+        self.runtime = PrimitiveRuntimeValidator()
 
     def validate(self, scene: "Scene", draft: PrimitiveDraft) -> DraftValidation:
-        """Collect validation errors and warnings for a primitive draft.
+        """Collect all validation errors and warnings for a primitive draft."""
+        snapshot = PrimitiveStore.read_snapshot_for_scene(scene)
+        return self.validate_candidate(scene, snapshot, draft)
 
-        Validation checks collisions with committed state, builds a combined
-        candidate root, resolves cross-references, and rejects forbidden state
-        destinations. Schema and reference value failures are returned as errors
-        instead of being raised.
+    def validate_candidate(
+        self,
+        scene: "Scene",
+        snapshot: PrimitiveStoreSnapshot,
+        draft: PrimitiveDraft,
+    ) -> DraftValidation:
+        """Validate a detached draft against one already revision-checked snapshot.
 
         Args:
-            scene: Scene containing the committed primitive root against which the
-                draft is validated.
-            draft: Detached draft whose staged definitions and anchors are checked.
+            scene: Scene supplying relationship participant identities.
+            snapshot: Exact detached root represented by the caller's revision.
+            draft: Detached change set to evaluate without persistence.
 
         Returns:
-            A validation result whose ``ok`` flag is true only when no errors were
-            collected.
+            Structured blocking errors and non-blocking warnings.
 
-        Raises:
-            PrimitiveStoreError: If the scene's persisted primitive root is
-                malformed and cannot be read.
-
+        Side Effects:
+            None; neither ``draft`` nor its complete candidate is persisted.
         """
         errors: list[str] = []
         warnings: list[str] = []
         try:
-            self._validate_collisions(scene, draft, errors)
-            candidate = self.candidate_root(scene, draft)
-            self._validate_attribute_refs(candidate, errors, warnings)
-            self._validate_instance_definition_refs(candidate, errors)
-            self._validate_modifier_targets(candidate, errors)
-            self._validate_condition_refs(candidate, errors)
-            self._validate_forbidden_destinations(candidate, errors)
-        except (pydantic.ValidationError, ValueError) as exc:
+            self._validate_collisions(snapshot, draft, errors)
+            candidate = self.candidate_root(snapshot, draft)
+            self._validate_relationship_characters(scene, candidate, errors)
+            self.references.validate(candidate, errors, warnings)
+            self.runtime.validate(candidate, errors)
+        except (PrimitiveError, pydantic.ValidationError, ValueError) as exc:
             errors.append(str(exc))
         return DraftValidation(ok=not errors, errors=errors, warnings=warnings)
 
+    @staticmethod
+    def _validate_relationship_characters(
+        scene: "Scene", root: PrimitiveRootPayload, errors: list[str]
+    ) -> None:
+        """Reject relationship anchors with missing scene participants."""
+        character_names = set(scene.all_character_names)
+        for anchor_key in sorted(root.anchors):
+            anchor = AnchorRef.parse(anchor_key)
+            if anchor.kind != "relationship":
+                continue
+            source, target = relationship_participants(anchor)
+            missing = [name for name in (source, target) if name not in character_names]
+            if missing:
+                errors.append(
+                    f"Relationship anchor '{anchor_key}' references missing "
+                    f"character(s): {', '.join(missing)}"
+                )
+
     def candidate_root(
-        self, scene: "Scene", draft: PrimitiveDraft
+        self, snapshot: PrimitiveStoreSnapshot, draft: PrimitiveDraft
     ) -> PrimitiveRootPayload:
-        """Build a normalized committed-root candidate without mutating the scene.
-
-        Args:
-            scene: Scene containing the committed primitive root used as the
-                candidate base.
-            draft: Draft whose definitions and anchors are merged into the
-                candidate.
-
-        Returns:
-            A validated primitive root containing committed state plus all staged
-            draft definitions and anchors.
-
-        Raises:
-            PrimitiveStoreError: If the scene's persisted primitive root is
-                malformed.
-            pydantic.ValidationError: If the merged root violates the primitive
-                root schema.
-            ValueError: If merged identifiers or typed payload invariants are
-                invalid.
-
-        """
-        root = copy.deepcopy(PrimitiveStore.for_scene(scene).root)
+        """Build a normalized committed-root candidate without persistence."""
+        root = snapshot.detached_root_model().model_dump(mode="python")
+        for target in draft.deletions.definitions:
+            root["definitions"].get(target.kind, {}).pop(target.id, None)
+        for primitive_text in draft.deletions.primitives:
+            primitive = PrimitiveRef.parse(primitive_text)
+            anchor = root["anchors"].get(primitive.anchor.key())
+            if anchor is not None:
+                anchor["primitives"].get(primitive.kind, {}).pop(primitive.id, None)
+        for anchor_key in draft.deletions.anchors:
+            root["anchors"].pop(anchor_key, None)
         for kind, values in draft.definitions.items():
             root["definitions"].setdefault(kind, {}).update(copy.deepcopy(values))
-        root["anchors"].update(
-            {key: value.model_dump(mode="json") for key, value in draft.anchors.items()}
-        )
+        replacement_anchors = set(draft.replacements.anchors)
+        for anchor_key, staged in draft.anchors.items():
+            staged_payload = staged.model_dump(mode="json")
+            committed = root["anchors"].get(anchor_key)
+            if committed is None:
+                root["anchors"][anchor_key] = staged_payload
+                continue
+            if anchor_key in replacement_anchors:
+                committed["tags"] = staged_payload["tags"]
+                committed["meta"] = staged_payload["meta"]
+            for kind, primitives in staged_payload["primitives"].items():
+                committed["primitives"].setdefault(kind, {}).update(primitives)
         return PrimitiveRootPayload.model_validate(root)
 
     def commit(self, scene: "Scene", draft: PrimitiveDraft) -> PrimitiveDraft:
-        """Revalidate and atomically commit a draft into the primitive root.
+        """Revalidate and atomically commit a draft into the primitive root."""
+        snapshot = PrimitiveStore.read_snapshot_for_scene(scene)
+        candidate, committed_draft = self.committed_candidate(scene, snapshot, draft)
+        PrimitiveStore.for_scene(scene).replace_validated_root(candidate)
+        return committed_draft
 
-        Args:
-            scene: Scene whose persisted primitive root receives the staged
-                definitions and anchors.
-            draft: Detached draft to validate and commit.
-
-        Returns:
-            The committed draft record with staged content cleared and the final
-            validation result retained.
-
-        Raises:
-            ValueError: If draft validation reports one or more blocking errors.
-            PrimitiveStoreError: If the scene's primitive root is malformed or
-                the validated candidate cannot replace it.
-            pydantic.ValidationError: If candidate root construction fails schema
-                validation after draft validation.
-
-        Side Effects:
-            Mutates the supplied draft's validation and status on validation
-            failure. On success, atomically replaces the scene's primitive root,
-            installs staged definitions and anchors, and marks the persisted draft
-            as committed with its staged content cleared.
-
-        """
-        validation = self.validate(scene, draft)
+    def committed_candidate(
+        self,
+        scene: "Scene",
+        snapshot: PrimitiveStoreSnapshot,
+        draft: PrimitiveDraft,
+    ) -> tuple[PrimitiveRootPayload, PrimitiveDraft]:
+        """Build a validated candidate with canonical committed draft evidence."""
+        validation = self.validate_candidate(scene, snapshot, draft)
         draft.validation = validation
         if not validation.ok:
             draft.status = "draft"
             raise ValueError(
                 "Primitive draft validation failed: " + "; ".join(validation.errors)
             )
-        candidate = self.candidate_root(scene, draft)
+        candidate = self.candidate_root(snapshot, draft)
         committed_draft = candidate.drafts[draft.id]
         committed_draft.status = "committed"
         committed_draft.validation = validation
         committed_draft.definitions = PrimitiveDefinitions()
         committed_draft.anchors = {}
-        PrimitiveStore.for_scene(scene).replace_validated_root(candidate)
-        return committed_draft
+        committed_draft.replacements = DraftChangeTargets()
+        committed_draft.deletions = DraftChangeTargets()
+        return candidate, committed_draft
 
     def _validate_collisions(
-        self, scene: "Scene", draft: PrimitiveDraft, errors: list[str]
+        self,
+        snapshot: PrimitiveStoreSnapshot,
+        draft: PrimitiveDraft,
+        errors: list[str],
     ) -> None:
-        root = PrimitiveStore.for_scene(scene).root
+        root = snapshot.detached_root_model().model_dump(mode="json")
+        replacements = {
+            (target.kind, target.id) for target in draft.replacements.definitions
+        }
         for kind, values in draft.definitions.items():
             committed = root["definitions"].get(kind, {})
             for definition_id in values.keys() & committed.keys():
-                errors.append(f"Definition already exists: {kind}/{definition_id}")
+                if (kind, definition_id) not in replacements:
+                    errors.append(f"Definition already exists: {kind}/{definition_id}")
         for anchor_key in draft.anchors.keys() & root["anchors"].keys():
-            errors.append(f"Anchor already exists: {anchor_key}")
-
-    def _validate_attribute_refs(
-        self, root: PrimitiveRootPayload, errors: list[str], warnings: list[str]
-    ) -> None:
-        definitions = root.definitions
-        handlers = {
-            "deck": lambda ref: self._validate_definition_ref(
-                definitions["decks"], ref, "deck", errors
-            ),
-            "roll_table": lambda ref: self._validate_definition_ref(
-                definitions["roll_tables"], ref, "roll table", errors
-            ),
-            "meter": lambda ref: self._validate_primitive_ref(
-                root, ref, "meters", errors
-            ),
-            "clock": lambda ref: self._validate_primitive_ref(
-                root, ref, "clocks", errors
-            ),
-            "modifier": lambda ref: self._validate_modifier_ref(root, ref, errors),
-            "relationship": lambda ref: self._validate_relationship_ref(
-                root, ref, errors
-            ),
-        }
-        for anchor_key, anchor in root.anchors.items():
-            for attribute_id, payload in anchor.primitives.get(
-                "attributes", {}
-            ).items():
-                source = AttributeSource.model_validate(payload)
-                if source.render_policy == "prompt" and source.source in {
-                    "deck",
-                    "roll_table",
-                }:
-                    warnings.append(
-                        f"{anchor_key}/attributes/{attribute_id} uses a mutating prompt source"
-                    )
-                self._validate_source_warnings(
-                    root, anchor_key, attribute_id, source, warnings
-                )
-                handler = handlers.get(source.source)
-                if handler is not None:
-                    handler(source.ref)
-
-    def _validate_instance_definition_refs(
-        self, root: PrimitiveRootPayload, errors: list[str]
-    ) -> None:
-        """Require every anchored roll-table instance to reference a definition."""
-        definitions = root.definitions["roll_tables"]
-        for anchor_key, anchor in root.anchors.items():
-            for instance_id, payload in anchor.primitives.get(
-                "roll_tables", {}
-            ).items():
-                instance = RollTableInstancePayload.model_validate(payload)
-                if instance.definition not in definitions:
-                    errors.append(
-                        "Missing roll table definition for "
-                        f"{anchor_key}/roll_tables/{instance_id}: "
-                        f"{instance.definition}"
-                    )
-
-    def _validate_modifier_targets(
-        self, root: PrimitiveRootPayload, errors: list[str]
-    ) -> None:
-        for payload in root.definitions["modifiers"].values():
-            modifier = RollModifier.model_validate(payload)
-            if "/" in modifier.applies_to:
-                self._validate_primitive_ref(
-                    root, modifier.applies_to, "roll_tables", errors
-                )
-            elif modifier.applies_to not in root.definitions["roll_tables"]:
-                errors.append(f"Missing modifier target: {modifier.applies_to}")
-
-        for payload in root.definitions["roll_tables"].values():
-            table = RollTableDefinition.model_validate(payload)
-            for modifier_ref in table.modifiers:
-                self._validate_modifier_ref(root, modifier_ref, errors)
-
-    def _validate_condition_refs(
-        self, root: PrimitiveRootPayload, errors: list[str]
-    ) -> None:
-        groups: list[PrimitiveConditionGroup] = []
-        for anchor in root.anchors.values():
-            for payload in anchor.primitives.get("attributes", {}).values():
-                groups.extend(AttributeSource.model_validate(payload).conditions)
-        for payload in root.definitions["modifiers"].values():
-            groups.extend(RollModifier.model_validate(payload).when)
-        for payload in root.definitions["decks"].values():
-            deck = DeckDefinition.model_validate(payload)
-            for card in deck.cards:
-                groups.extend(card.conditions)
-        for payload in root.definitions["roll_tables"].values():
-            table = RollTableDefinition.model_validate(payload)
-            for row in table.rows:
-                groups.extend(row.conditions)
-        for payload in root.definitions["adventures"].values():
-            adventure = AdventureDefinition.model_validate(payload)
-            for transition in adventure.transitions.values():
-                groups.extend(transition.conditions)
-
-        handlers = {
-            "primitive": lambda condition: self._validate_primitive_condition(
-                root, condition, errors
-            ),
-            "meter": lambda condition: self._validate_anchored_condition(
-                root, condition, "meters", errors
-            ),
-            "clock_complete": lambda condition: self._validate_anchored_condition(
-                root, condition, "clocks", errors
-            ),
-            "relationship": lambda condition: self._validate_anchored_condition(
-                root, condition, "meters", errors, relationship=True
-            ),
-            "anchor_has_tag": lambda condition: self._validate_tag_condition(
-                root, condition, errors
-            ),
-            "anchor_missing_tag": lambda condition: self._validate_tag_condition(
-                root, condition, errors
-            ),
-        }
-        for group in groups:
-            for condition in group.conditions:
-                handler = handlers.get(condition.kind)
-                if handler is not None:
-                    handler(condition)
-
-    def _validate_primitive_condition(
-        self,
-        root: PrimitiveRootPayload,
-        condition: PrimitiveCondition,
-        errors: list[str],
-    ) -> None:
-        ref = PrimitiveRef.parse(condition.path)
-        self._validate_primitive_ref(root, ref.key(), ref.kind, errors)
-
-    def _validate_anchored_condition(
-        self,
-        root: PrimitiveRootPayload,
-        condition: PrimitiveCondition,
-        kind: str,
-        errors: list[str],
-        *,
-        relationship: bool = False,
-    ) -> None:
-        ref = self._condition_ref(condition, kind)
-        self._validate_primitive_ref(root, ref, kind, errors, relationship=relationship)
+            if anchor_key not in draft.replacements.anchors and not any(
+                primitives
+                for key, anchor in draft.anchors.items()
+                if key == anchor_key
+                for primitives in anchor.primitives.values()
+            ):
+                errors.append(f"Anchor already exists: {anchor_key}")
+        replacement_primitives = set(draft.replacements.primitives)
+        for anchor_key, staged_anchor in draft.anchors.items():
+            committed_anchor = root["anchors"].get(anchor_key)
+            if committed_anchor is None:
+                continue
+            for kind, primitives in staged_anchor.primitives.items():
+                committed_primitives = committed_anchor["primitives"].get(kind, {})
+                for primitive_id in primitives.keys() & committed_primitives.keys():
+                    ref = f"{anchor_key}/{kind}/{primitive_id}"
+                    if ref not in replacement_primitives:
+                        errors.append(f"Primitive already exists: {ref}")
+        self._validate_change_targets(root, draft, errors)
 
     @staticmethod
-    def _validate_tag_condition(
-        root: PrimitiveRootPayload,
-        condition: PrimitiveCondition,
-        errors: list[str],
+    def _validate_change_targets(
+        root: dict, draft: PrimitiveDraft, errors: list[str]
     ) -> None:
-        anchor = AnchorRef.parse(condition.anchor)
-        if anchor.key() not in root.anchors:
-            errors.append(f"Missing anchor for tag condition: {anchor.key()}")
-
-    @staticmethod
-    def _condition_ref(condition, kind: str) -> str:
-        if condition.path:
-            return PrimitiveRef.parse(condition.path).key()
-        return PrimitiveRef(
-            anchor=AnchorRef.parse(condition.anchor),
-            kind=kind,
-            id=condition.dimension,
-        ).key()
-
-    def _validate_source_warnings(
-        self,
-        root: PrimitiveRootPayload,
-        anchor_key: str,
-        attribute_id: str,
-        source: AttributeSource,
-        warnings: list[str],
-    ) -> None:
-        source_path = f"{anchor_key}/attributes/{attribute_id}"
-        if (
-            source.render_policy in {"prompt", "summary"}
-            and source.source == "literal"
-            and source.value is None
-        ):
-            warnings.append(f"{source_path} lacks guaranteed renderable text")
-        if source.source == "deck" and source.ref in root.definitions["decks"]:
-            deck = DeckDefinition.model_validate(root.definitions["decks"][source.ref])
-            options = DeckAttributeOptions.model_validate(source.options)
-            if options.avoid_recent is not None and options.avoid_recent >= len(
-                deck.cards
+        """Require replacement and deletion targets to exist in committed state."""
+        for target in [
+            *draft.replacements.definitions,
+            *draft.deletions.definitions,
+        ]:
+            if target.id not in root["definitions"].get(target.kind, {}):
+                errors.append(f"Definition not found: {target.kind}/{target.id}")
+        for anchor_key in [*draft.replacements.anchors, *draft.deletions.anchors]:
+            if anchor_key not in root["anchors"]:
+                errors.append(f"Anchor not found: {anchor_key}")
+        for primitive_text in [
+            *draft.replacements.primitives,
+            *draft.deletions.primitives,
+        ]:
+            primitive = PrimitiveRef.parse(primitive_text)
+            anchor = root["anchors"].get(primitive.anchor.key())
+            if anchor is None or primitive.id not in anchor["primitives"].get(
+                primitive.kind, {}
             ):
-                warnings.append(
-                    f"{source_path} avoid_recent is greater than or equal to card count"
-                )
-            if source.render_policy in {"prompt", "summary"} and (
-                options.result_field not in {"text", "label"}
-                or (
-                    options.result_field == "text"
-                    and any(not card.text for card in deck.cards)
-                )
-            ):
-                warnings.append(f"{source_path} lacks guaranteed renderable text")
-        elif (
-            source.source == "roll_table"
-            and source.ref in root.definitions["roll_tables"]
-        ):
-            table = RollTableDefinition.model_validate(
-                root.definitions["roll_tables"][source.ref]
-            )
-            options = RollTableAttributeOptions.model_validate(source.options)
-            if source.render_policy in {"prompt", "summary"} and (
-                options.result_field not in {"text", "label"}
-                or (
-                    options.result_field == "text"
-                    and any(not row.text for row in table.rows)
-                )
-            ):
-                warnings.append(f"{source_path} lacks guaranteed renderable text")
-
-    def _validate_forbidden_destinations(
-        self, root: PrimitiveRootPayload, errors: list[str]
-    ) -> None:
-        def visit(value, field: str | None = None) -> None:
-            if (
-                field in {"destination", "target", "ref", "path", "applies_to"}
-                and isinstance(value, str)
-                and "base_attributes" in value
-            ):
-                errors.append(
-                    "Primitive destination/ref cannot target Character.base_attributes: "
-                    + value
-                )
-            elif isinstance(value, dict):
-                for key, nested in value.items():
-                    visit(nested, key)
-            elif isinstance(value, list):
-                for nested in value:
-                    visit(nested, field)
-            elif isinstance(value, pydantic.BaseModel):
-                visit(value.model_dump(mode="python"), field)
-
-        visit(root.definitions)
-        visit(root.anchors)
-
-    def _validate_modifier_ref(
-        self, root: PrimitiveRootPayload, ref_text: str | None, errors: list[str]
-    ) -> None:
-        if ref_text is None:
-            return
-        if "/" in ref_text:
-            self._validate_primitive_ref(root, ref_text, "modifiers", errors)
-        elif ref_text not in root.definitions["modifiers"]:
-            errors.append(f"Missing modifier: {ref_text}")
-
-    @staticmethod
-    def _validate_definition_ref(
-        definitions: dict,
-        ref_text: str | None,
-        category: str,
-        errors: list[str],
-    ) -> None:
-        if ref_text not in definitions:
-            errors.append(f"Missing {category} definition: {ref_text}")
-
-    def _validate_relationship_ref(
-        self, root: PrimitiveRootPayload, ref_text: str | None, errors: list[str]
-    ) -> None:
-        if ref_text is None:
-            return
-        if "/" in ref_text:
-            self._validate_primitive_ref(
-                root, ref_text, "meters", errors, relationship=True
-            )
-            return
-        anchor = AnchorRef.parse(ref_text)
-        if anchor.kind != "relationship" or anchor.key() not in root.anchors:
-            errors.append(f"Missing relationship: {ref_text}")
-
-    def _validate_primitive_ref(
-        self,
-        root: PrimitiveRootPayload,
-        ref_text: str | None,
-        expected_kind: str,
-        errors: list[str],
-        *,
-        relationship: bool = False,
-    ) -> None:
-        if ref_text is None:
-            return
-        ref = PrimitiveRef.parse(ref_text)
-        anchor = root.anchors.get(ref.anchor.key())
-        if (
-            ref.kind != expected_kind
-            or (relationship and ref.anchor.kind != "relationship")
-            or anchor is None
-            or ref.id not in anchor.primitives.get(expected_kind, {})
-        ):
-            errors.append(f"Missing {expected_kind[:-1]} primitive: {ref_text}")
+                errors.append(f"Primitive not found: {primitive.key()}")

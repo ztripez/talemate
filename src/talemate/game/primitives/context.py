@@ -18,7 +18,7 @@ from talemate.game.primitives.anchors import (
 from talemate.game.primitives.attributes import AttributeResolver
 from talemate.game.primitives.adventure import AdventureEngine
 from talemate.game.primitives.relationships import RelationshipGraph
-from talemate.game.primitives.schema import GAME_PRIMITIVES_KEY
+from talemate.game.primitives.constants import GAME_PRIMITIVES_KEY
 from talemate.game.primitives.store import PrimitiveStore, PrimitiveStoreReader
 
 if TYPE_CHECKING:

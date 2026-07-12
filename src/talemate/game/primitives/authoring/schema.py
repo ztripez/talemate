@@ -4,15 +4,10 @@ import pydantic
 
 from talemate.game.primitives.attributes import AttributeSource
 from talemate.game.primitives.conditions import PrimitiveConditionGroup
-from talemate.game.primitives.decks import DeckDefinition
+from talemate.game.primitives.deck_schema import DeckDefinition
 from talemate.game.primitives.definitions import ClockPayload, MeterPayload
 from talemate.game.primitives.modifiers import RollModifier
-from talemate.game.primitives.render import RenderPolicy
 from talemate.game.primitives.roll_tables import RollTableDefinition
-from talemate.game.primitives.schema import (
-    DraftValidation,
-    PrimitiveDraft,
-)
 
 
 class DraftRequest(pydantic.BaseModel):
@@ -20,12 +15,18 @@ class DraftRequest(pydantic.BaseModel):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to read or mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
+
+    Invariants:
+        Unknown fields are rejected and surrounding string whitespace is stripped.
+        ``draft_id`` and ``expected_revision`` are non-empty.
 
     """
 
     model_config = pydantic.ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     draft_id: str = pydantic.Field(min_length=1)
+    expected_revision: str = pydantic.Field(min_length=1)
 
     @property
     def canonical_payload(self) -> dict[str, pydantic.JsonValue]:
@@ -36,7 +37,7 @@ class DraftRequest(pydantic.BaseModel):
             identifier.
 
         """
-        return self.model_dump(mode="json", exclude={"draft_id"})
+        return self.model_dump(mode="json", exclude={"draft_id", "expected_revision"})
 
 
 class AnchoredDraftRequest(DraftRequest):
@@ -44,6 +45,7 @@ class AnchoredDraftRequest(DraftRequest):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         anchor: Anchor reference under which to stage the primitive.
 
     """
@@ -60,7 +62,9 @@ class AnchoredDraftRequest(DraftRequest):
 
         """
         return self.model_dump(
-            mode="json", exclude={"draft_id", "anchor"}, exclude_none=True
+            mode="json",
+            exclude={"draft_id", "expected_revision", "anchor"},
+            exclude_none=True,
         )
 
 
@@ -69,6 +73,7 @@ class DefinitionDraftRequest(DraftRequest):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
 
     """
 
@@ -81,7 +86,7 @@ class DefinitionDraftRequest(DraftRequest):
             identifier.
 
         """
-        return self.model_dump(mode="json", exclude={"draft_id"})
+        return self.model_dump(mode="json", exclude={"draft_id", "expected_revision"})
 
 
 class OptionalAnchoredDefinitionRequest(DefinitionDraftRequest):
@@ -89,6 +94,7 @@ class OptionalAnchoredDefinitionRequest(DefinitionDraftRequest):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         anchor: Optional anchor reference under which to stage an instance.
         instance_id: Optional instance identifier requiring ``anchor``; the
             definition identifier is used when this value is omitted.
@@ -124,7 +130,8 @@ class OptionalAnchoredDefinitionRequest(DefinitionDraftRequest):
 
         """
         return self.model_dump(
-            mode="json", exclude={"draft_id", "anchor", "instance_id"}
+            mode="json",
+            exclude={"draft_id", "expected_revision", "anchor", "instance_id"},
         )
 
 
@@ -133,6 +140,7 @@ class CreateAnchorRequest(DraftRequest):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         kind: Anchor kind used in the canonical anchor reference.
         id: Anchor identifier used in the canonical anchor reference.
         tags: Tag strings assigned to the staged anchor.
@@ -151,6 +159,7 @@ class CreateMeterRequest(AnchoredDraftRequest, MeterPayload):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         anchor: Anchor reference under which to stage the meter.
         id: Canonical path-segment identifier for the meter.
         label: Optional human-readable meter label.
@@ -167,6 +176,7 @@ class CreateClockRequest(AnchoredDraftRequest, ClockPayload):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         anchor: Anchor reference under which to stage the clock.
         id: Canonical path-segment identifier for the clock.
         label: Optional human-readable clock label.
@@ -182,6 +192,7 @@ class CreateDeckRequest(OptionalAnchoredDefinitionRequest, DeckDefinition):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         id: Stable non-empty deck identifier.
         name: Human-readable non-empty deck name.
         mode: Card selection mode controlling replacement and runtime state.
@@ -201,6 +212,7 @@ class CreateRollTableRequest(OptionalAnchoredDefinitionRequest, RollTableDefinit
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         id: Stable non-empty roll-table identifier.
         name: Human-readable non-empty roll-table name.
         mode: Selection mode, either dice-total or weighted selection.
@@ -213,70 +225,12 @@ class CreateRollTableRequest(OptionalAnchoredDefinitionRequest, RollTableDefinit
     """
 
 
-class RelationshipDimensionInput(pydantic.BaseModel):
-    """Describe one bounded meter on a directional relationship.
-
-    Attributes:
-        id: Non-empty canonical meter id that must not contain ``/``.
-        label: Optional human-readable dimension label.
-        min: Finite inclusive lower bound; defaults to ``-5``.
-        max: Finite inclusive upper bound; defaults to ``5``.
-        value: Finite current value within the inclusive bounds; defaults to ``0``.
-        render_policy: Visibility policy for relationship rendering; defaults to
-            ``"summary"``.
-
-    Invariants:
-        Input is strict and rejects unknown fields and numeric coercion. Bounds
-        satisfy ``min <= value <= max`` and all numeric values are finite.
-    """
-
-    model_config = pydantic.ConfigDict(
-        extra="forbid",
-        allow_inf_nan=False,
-        str_strip_whitespace=True,
-        strict=True,
-    )
-
-    id: str = pydantic.Field(min_length=1)
-    label: str | None = None
-    min: pydantic.StrictInt | pydantic.StrictFloat = -5
-    max: pydantic.StrictInt | pydantic.StrictFloat = 5
-    value: pydantic.StrictInt | pydantic.StrictFloat = 0
-    render_policy: RenderPolicy = "summary"
-
-    def to_meter_payload(self) -> MeterPayload:
-        """Convert the relationship dimension to a canonical meter payload.
-
-        Returns:
-            A new meter payload containing all relationship dimension fields.
-            Subsequent mutation of either model does not affect the other.
-
-        Raises:
-            pydantic.ValidationError: If any field violates the canonical meter
-                schema.
-        """
-        return MeterPayload.model_validate(self.model_dump())
-
-    @pydantic.model_validator(mode="after")
-    def validate_canonical_meter(self) -> "RelationshipDimensionInput":
-        """Require every relationship dimension to satisfy the meter schema.
-
-        Returns:
-            The validated relationship dimension without mutation.
-
-        Raises:
-            pydantic.ValidationError: If conversion to the canonical meter schema
-                fails. Pydantic reports the failure during model validation.
-        """
-        self.to_meter_payload()
-        return self
-
-
 class CreateRelationshipRequest(DraftRequest):
     """Describe a directional relationship anchor to stage in a draft.
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         source: Anchor reference for the relationship source.
         target: Anchor reference for the relationship target.
         dimensions: Uniquely identified bounded meters representing relationship
@@ -287,14 +241,26 @@ class CreateRelationshipRequest(DraftRequest):
 
     source: str
     target: str
-    dimensions: list[RelationshipDimensionInput]
+    dimensions: list[MeterPayload]
     tags: list[str] = pydantic.Field(default_factory=list)
+
+    @pydantic.field_validator("dimensions", mode="before")
+    @classmethod
+    def apply_relationship_dimension_defaults(cls, value: object) -> object:
+        """Apply relationship-specific defaults before canonical meter validation."""
+        if not isinstance(value, list):
+            return value
+        defaults = {"min": -5, "max": 5, "value": 0, "render_policy": "summary"}
+        return [
+            {**defaults, **dimension} if isinstance(dimension, dict) else dimension
+            for dimension in value
+        ]
 
     @pydantic.field_validator("dimensions")
     @classmethod
     def validate_unique_dimensions(
-        cls, value: list[RelationshipDimensionInput]
-    ) -> list[RelationshipDimensionInput]:
+        cls, value: list[MeterPayload]
+    ) -> list[MeterPayload]:
         """Require unique identifiers across relationship dimensions.
 
         Args:
@@ -331,6 +297,7 @@ class CreateModifierRequest(DraftRequest):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         id: Stable modifier identifier.
         label: Optional display label for debug traces.
         applies_to: Roll-table definition identifier or primitive reference
@@ -364,7 +331,7 @@ class CreateModifierRequest(DraftRequest):
             {
                 **self.model_dump(
                     mode="python",
-                    exclude={"draft_id", "operation"},
+                    exclude={"draft_id", "expected_revision", "operation"},
                 ),
                 "add": self.operation.add,
             }
@@ -391,6 +358,7 @@ class CreateAttributeSourceRequest(AnchoredDraftRequest, AttributeSource):
 
     Attributes:
         draft_id: Non-empty identifier of the draft to mutate.
+        expected_revision: Non-empty primitive-root revision required by mutations.
         anchor: Anchor reference under which to stage the attribute source.
         id: Stable non-empty attribute identifier under the anchor.
         label: Optional human-readable label used during rendering.
@@ -432,7 +400,4 @@ __all__ = [
     "CreateRollTableRequest",
     "DefinitionDraftRequest",
     "DraftRequest",
-    "DraftValidation",
-    "PrimitiveDraft",
-    "RelationshipDimensionInput",
 ]

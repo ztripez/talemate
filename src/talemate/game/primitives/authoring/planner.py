@@ -7,7 +7,7 @@ from typing import Literal
 import pydantic
 
 from talemate.game.primitives.anchors import AnchorRef
-from talemate.game.primitives.schema import PrimitiveDraft
+from talemate.game.primitives.draft_schema import PrimitiveDraft
 
 
 class PrimitivePlanSystem(pydantic.BaseModel):
@@ -221,9 +221,9 @@ class PrimitiveDraftReport(pydantic.BaseModel):
                 len(anchor.primitives.get("attributes", {}))
                 for anchor in draft.anchors.values()
             ),
-            decks=len(draft.definitions.root["decks"]),
-            roll_tables=len(draft.definitions.root["roll_tables"]),
-            modifiers=len(draft.definitions.root["modifiers"]),
+            decks=len(draft.definitions["decks"]),
+            roll_tables=len(draft.definitions["roll_tables"]),
+            modifiers=len(draft.definitions["modifiers"]),
         )
         created = ", ".join(
             f"{count} {kind.replace('_', ' ')}"

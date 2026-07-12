@@ -12,7 +12,7 @@ import talemate.game.engine.nodes.load_definitions  # noqa: F401
 from talemate.context import ActiveScene
 from talemate.game.engine.nodes.registry import get_node
 from talemate.game.primitives.decks import DeckEngine
-from talemate.game.primitives.exceptions import PrimitiveError
+from talemate.game.primitives.exceptions import PrimitiveError, PrimitiveStoreError
 from talemate.game.primitives.store import PrimitiveStore
 from talemate.tale_mate import Scene
 
@@ -401,10 +401,8 @@ def test_primitive_reference_rejects_noncanonical_persisted_payloads(payload):
     """Persisted deck instances accept only the canonical instance schema."""
     scene = Scene()
     store = PrimitiveStore.for_scene(scene)
-    store.set_runtime_primitive("scene:main/decks/weather", payload)
-
-    with pytest.raises(PrimitiveError, match="Invalid persisted deck instance"):
-        DeckEngine().peek(scene, "scene:main/decks/weather")
+    with pytest.raises(PrimitiveStoreError, match="Invalid primitive payload"):
+        store.set_runtime_primitive("scene:main/decks/weather", payload)
 
 
 def test_stale_runtime_definition_id_fails_without_mutating_state():

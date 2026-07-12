@@ -4,6 +4,7 @@ from talemate.game.engine.nodes.core import GraphState
 from talemate.game.engine.nodes.primitives.authoring_base import (
     DraftOutputNode,
     authoring_service,
+    current_revision,
 )
 from talemate.game.engine.nodes.primitives.helpers import optional_input
 from talemate.game.engine.nodes.registry import register
@@ -39,6 +40,7 @@ class CreateDeck(DraftOutputNode):
         request = CreateDeckRequest.model_validate(
             {
                 "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
                 "id": self.require_input("id"),
                 "name": self.require_input("name"),
                 "mode": self.require_input("mode"),
@@ -76,6 +78,7 @@ class CreateRollTable(DraftOutputNode):
         request = CreateRollTableRequest.model_validate(
             {
                 "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
                 "id": self.require_input("id"),
                 "name": self.require_input("name"),
                 "mode": self.require_input("mode"),
@@ -113,6 +116,7 @@ class CreateModifier(DraftOutputNode):
         request = CreateModifierRequest.model_validate(
             {
                 "draft_id": self.require_input("draft_id"),
+                "expected_revision": current_revision(),
                 "id": self.require_input("id"),
                 "label": optional_input(self, "label", None),
                 "applies_to": self.require_input("applies_to"),
